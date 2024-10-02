@@ -1,0 +1,18 @@
+const express = require('express');
+const passport = require('passport');
+const { googleCallback } = require('../controllers/auth.controller');
+const router = express.Router();
+
+// Redirect to Google for authentication
+router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'], session: false }));
+
+// Callback URL after Google login
+router.get(
+    '/google/callback',
+    passport.authenticate('google', { failureRedirect: '/', session: false }), // Disable session
+   googleCallback
+  );
+  
+
+module.exports = router;
+
