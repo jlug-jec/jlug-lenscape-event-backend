@@ -3,26 +3,24 @@ const Team = require('../models/team.model');
 const Invitation = require('../models/invitation.model');
 const sendEmail = require('../config/email');
 const createPost = require('../models/post.model');
+const {generateInvitationHTML,generatePartipantHTML,generateVoterHTML}=require('../templates/invitation')
 // Get posts for a participant
 
 // Submit a post for a participant
 
 exports.onboardedUser= async (req, res) => {
-  console.log("ONBOARDING")
-  console.log(req.body);
+  
   try {
-    const { userId, branch, instagramId, isParticipant, domains,teamName } = req.body;
+    const { id, branch, isParticipant,collegeName } = req.body;
 
     // Update user with onboarding data
     const user = await User.findByIdAndUpdate(
-      userId,
+      id,
       {
         branch,
-        instagramId,
+        collegeName,
         isParticipant,
         isOnboarded: true,
-        domains,
-        teamName
       },
       { new: true } // Return the updated user
     );
@@ -30,16 +28,31 @@ exports.onboardedUser= async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+   
+    const htmlContent = generateVoterHTML(userName=user.name, "https://jlug.club.lenscape/countdown");
 
+    await sendEmail({
+      email: user.email,
+      subject: 'Lenscape 2024 - Countdown Begins',
+      html: htmlContent
+    });
     res.status(200).json({ message: 'User onboarded successfully', user });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Internal Server Error' });
   }
 };
+
 exports.onboardTeam = async (req, res) => {
   try {
-    const { teamName, teamMembers, teamLeader, branch, collegeName, posts } = req.body;
+   
+
+    const { teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = req.body;
+
+    if(isParticipant==false){
+      this.onboardedUser(req,res);
+      return
+    }
 
     // Filter valid team members (those with userIds)
     const validTeamMembers = teamMembers.filter(member => member.userId);
@@ -66,6 +79,7 @@ exports.onboardTeam = async (req, res) => {
 
     // Loop through all team members to send invitations if needed
     for (const member of teamMembers) {
+
       // If the member has a valid userId, update their info
       if (member.userId) {
         await User.findByIdAndUpdate(member.userId, {
@@ -76,12 +90,17 @@ exports.onboardTeam = async (req, res) => {
           collegeName: member.collegeName || collegeName,
           isOnboarded: true
         });
+        await sendEmail({
+          email: member.email,
+          subject: 'Lenscape 2024 - Countdown Begins',
+          html:generatePartipantHTML(userName=member.name,teamName,teamPageLink="jlug.club.lenscape/profile")
+        });
       } else {
         // If the member doesn't have a userId, send an invitation email
         await sendEmail({
           email: member.email,
-          subject: 'Team Invitation',
-          message: `You've been invited to join the team "${teamName}". Please sign in to complete your registration.`
+          subject: 'Lenscape 2024',
+          html:generateInvitationHTML(teamName,"jlug.club.lenscape")
         });
 
         const invitation = new Invitation({
@@ -101,15 +120,17 @@ exports.onboardTeam = async (req, res) => {
 }
 exports.joinTeam = async (req, res) => {
   try {
-    const { userId, teamId } = req.body;
-    const user = await User.findById(userId);
+    const { id, teamId,branch } = req.body;
+    console.log(id,teamId)
+    const user = await User.findById(id);
     const team = await Team.findById(teamId);
 
     if (!user || !team) {
       return res.status(404).json({ message: 'User or team not found' });
     }
-
-    const invitation = await Invitation.findOne({ email: user.email, team: teamId });
+     
+    const invitation = await Invitation.findOne({ email: user.email, teamId: teamId });
+    console.log(invitation)
     if (!invitation) {
       return res.status(403).json({ message: 'User is not invited to this team' });
     }
@@ -117,13 +138,21 @@ exports.joinTeam = async (req, res) => {
     user.team = teamId;
     user.isParticipant = true;
     user.isOnboarded = true;
+    user.branch=branch;
+    user.collegeName=collegeName;
     await user.save();
+    console.log(user)
 
     team.teamMembers.push(user._id);
     await team.save();
 
     // Remove the invitation
     await Invitation.findByIdAndDelete(invitation._id);
+    await sendEmail({
+      email: user.email,
+      subject: 'Lenscape 2024',
+      html:generatePartipantEmail(teamName)
+    });
 
     res.status(200).json({ message: 'User joined the team successfully', user });
   } catch (error) {
@@ -187,7 +216,7 @@ exports.getInvitationsByTeamId = async (req, res) => {
     console.log("TEAM ID", teamId);
     
     // Find the team to ensure it exists
-    const team = await Team.findById(teamId);
+    const team = await Team.findById(teamId).populate('teamMembers');
     if (!team) {
       return res.status(404).json({ message: 'Team not found' });
     }

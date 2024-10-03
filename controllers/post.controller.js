@@ -104,7 +104,6 @@ exports.editPostController = async (req, res) => {
 exports.getPosts = async (req, res) => {
   try {
     const { teamId } = req.params;
-    console.log(teamId);
 
     // Fetch the team and populate the posts
     const team = await Team.findById(teamId)

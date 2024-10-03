@@ -15,7 +15,7 @@ async function sendEmail(emailDetails) {
         from: process.env.SENDER_EMAIL,
         to: emailDetails.email,  // Ensure this is defined correctly
         subject: emailDetails.subject,
-        text: emailDetails.message,
+        html: emailDetails.html
     };
 
     try {
