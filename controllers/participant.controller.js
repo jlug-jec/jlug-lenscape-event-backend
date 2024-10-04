@@ -2,8 +2,11 @@ const User = require('../models/user.model'); // Updated to refer to User model
 const Team = require('../models/team.model');
 const Invitation = require('../models/invitation.model');
 const sendEmail = require('../config/email');
-const createPost = require('../models/post.model');
-const {generateInvitationHTML,generatePartipantHTML,generateVoterHTML}=require('../templates/invitation')
+const {createPost} = require('../controllers/post.controller');
+
+const checkDrivelink = require('../config/checkDrive'); 
+const {generateInvitationHTML,generatePartipantHTML,generateVoterHTML}=require('../templates/invitation');
+const { post } = require('../routes/auth.route');
 // Get posts for a participant
 
 // Submit a post for a participant
@@ -48,15 +51,27 @@ exports.onboardTeam = async (req, res) => {
    
 
     const { teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = req.body;
-
+      for (let post of posts){
+        const result=await checkDrivelink(post.link)
+        post.mediaType=result.type;
+        if(result.isPublic==false){
+          return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
+      }
+    }
     if(isParticipant==false){
       this.onboardedUser(req,res);
       return
+
     }
+    console.log("TEAM ONBOARDING")
+    console.log(posts)
+   
+
+   
 
     // Filter valid team members (those with userIds)
     const validTeamMembers = teamMembers.filter(member => member.userId);
-
+     
     // Create the team with valid members
     const newTeam = new Team({
       teamName,
@@ -65,16 +80,19 @@ exports.onboardTeam = async (req, res) => {
     });
 
     await newTeam.save();
-
+    
     // Create posts
     for (const post of posts) {
-      await createPost({
+      const postPayload={
         title: post.title,
         url: post.link,
-        user: newTeam._id,
-        domain: post.type,
+        teamId: newTeam._id,
+        domain: post.category,
+        type:post.type,
         teamName: teamName,
-      });
+      }
+      const postMetaData = await createPost(postPayload);
+      console.log(postMetaData)
     }
 
     // Loop through all team members to send invitations if needed

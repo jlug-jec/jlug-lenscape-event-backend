@@ -2,20 +2,45 @@
 const Post = require('../models/post.model');
 const User = require('../models/user.model');
 const Team=require('../models/team.model')
+const checkDrivelink = require('../config/checkDrive'); 
 
+const convertToDirectDownloadUrl = (url) => {
+  // Check if the URL is already in the required format
+  const regex = /https:\/\/drive\.google\.com\/uc\?id=([a-zA-Z0-9_-]+)/;
+  if (regex.test(url)) {
+      return url; // Return the URL if it's already in the correct format
+  }
+  
+  // Extract the file ID from the original URL
+  const idMatch = url.match(/d\/([a-zA-Z0-9_-]+)/);
+  if (idMatch && idMatch[1]) {
+      const fileId = idMatch[1];
+      // Return the direct download URL
+      return `https://drive.google.com/uc?id=${fileId}`;
+  }
+  
+  // If the URL is not valid, return the original URL or handle accordingly
+  console.error("Invalid Google Drive URL:", url);
+  return url; // Return the original URL if conversion fails
+};
 
-
-
-async function createPost(postDetails) {
+exports.createPost=async function createPost(postDetails) {
+  console.log("jiii")
+  console.log(postDetails)
   const newPost = new Post({
     title: postDetails.title,
     url: postDetails.url,
     teamId: postDetails.teamId,
-    domain: postDetails.category,
+    domain: postDetails.category || postDetails.domain,
+    type: postDetails.type,
     teamName: postDetails.teamName,
   });
+  console.log(newPost)
 
   try {
+
+
+
     await newPost.save();
 
     // Update the associated team with the new post's ID
@@ -31,27 +56,18 @@ async function createPost(postDetails) {
 }
 
 
-async function editPost(postId, postDetails) {
-  console.log(postDetails,postId)
-  const updatedPost = await Post.findByIdAndUpdate(
-    postDetails._id,
-    {
-      title: postDetails.title,
-      url: postDetails.url,
-      teamId: postDetails.teamId,
-      domain: postDetails.category,
-      teamName: postDetails.teamName,
-    },
-    { new: true }
-  );
-  
-  return updatedPost;
-}
+
 
 // Create a new post
 exports.createPostController = async (req, res) => {
   try {
     const postDetails = req.body;
+    console.log(postDetails)
+    const result=await checkDrivelink(postDetails.url)
+    if(result.isPublic==false){
+      return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
+  }
+   
     // Call the createPost function from the service
     const newPost = await createPost(postDetails);
     
@@ -71,12 +87,37 @@ exports.createPostController = async (req, res) => {
 };
 
 
+async function editPost(postId, postDetails) {
 
+  postDetails.url = convertToDirectDownloadUrl(postDetails.url);
+  console.log(postDetails.url)
+  const updatedPost = await Post.findByIdAndUpdate(
+    postDetails._id,
+    {
+      title: postDetails.title,
+      url: postDetails.url,
+      teamId: postDetails.teamId,
+      domain: postDetails.category,
+      type: postDetails.mediaType,
+      teamName: postDetails.teamName,
+    },
+    { new: true }
+  );
+  
+  return updatedPost;
+}
 
 exports.editPostController = async (req, res) => {
   try {
     const postId = req.params.id;
     const postDetails = req.body;
+    console.log(postDetails,postId)
+    const result=await checkDrivelink(postDetails.url)
+    console.log(result)
+    if(result.isPublic==false){
+      return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
+    }
+    console.log("here")
 
     // Call the editPost function from the service
     const updatedPost = await editPost(postId, postDetails);
