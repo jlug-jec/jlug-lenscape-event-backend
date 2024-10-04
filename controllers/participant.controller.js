@@ -51,18 +51,19 @@ exports.onboardTeam = async (req, res) => {
    
 
     const { teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = req.body;
-      for (let post of posts){
-        const result=await checkDrivelink(post.link)
-        post.mediaType=result.type;
-        if(result.isPublic==false){
-          return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
-      }
-    }
+     
     if(isParticipant==false){
       this.onboardedUser(req,res);
       return
 
     }
+    for (let post of posts){
+      const result=await checkDrivelink(post.link)
+      post.mediaType=result.type;
+      if(result.isPublic==false){
+        return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
+    }
+  }
     console.log("TEAM ONBOARDING")
     console.log(posts)
    
