@@ -15,12 +15,18 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 app.use(passport.initialize());
-app.use(cors(
-    {
-        origin: '*',
-        credentials: true
-    }
-));
+const allowedOrigins = ['http://localhost:3000', 'https://jlug-lenscape-event-frontend.vercel.app'];
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true
+}));
+
 // Routes
 app.use('/auth', authRoutes);
 app.use('/api/participant', participantRoutes);

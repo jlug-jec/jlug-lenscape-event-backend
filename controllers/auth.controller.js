@@ -9,13 +9,13 @@ exports.googleCallback = async (req, res) => {
     const invitation = await Invitation.findOne({ email: user.email }).populate('teamId');
     if (invitation) {
       // User has a pending invitation
-      res.redirect(`http://localhost:3000/onboarding?userId=${user._id}&teamId=${invitation.teamId._id}`);
+      res.redirect(`https://jlug-lenscape-event-frontend.vercel.app/onboarding?userId=${user._id}&teamId=${invitation.teamId._id}`);
     } else if (!user.isOnboarded) {
       // New user, needs to complete onboarding
-      res.redirect(`http://localhost:3000/onboarding?userId=${user._id}`);
+      res.redirect(`https://jlug-lenscape-event-frontend.vercel.app/onboarding?userId=${user._id}`);
     } else {
       // User is already onboarded
-      return res.redirect(`http://localhost:3000/onboarding?userId=${req.user._id}`);
+      return res.redirect(`https://jlug-lenscape-event-frontend.vercel.app//onboarding?userId=${req.user._id}`);
     }
   } catch (error) {
     console.error('Error in Google callback:', error);
