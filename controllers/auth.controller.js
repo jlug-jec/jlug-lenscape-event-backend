@@ -3,16 +3,17 @@ const User = require('../models/user.model');
 const Invitation = require('../models/invitation.model');
 exports.googleCallback = async (req, res) => {
   const { user } = req;
-  
+  console.log("Google Auth")
+  console.log(user)
   try {
     // Check if user has a pending invitation
     const invitation = await Invitation.findOne({ email: user.email }).populate('teamId');
     if (invitation) {
       // User has a pending invitation
-      res.redirect(`https://jlug-lenscape-event-frontend.vercel.app/onboarding?userId=${user._id}&teamId=${invitation.teamId._id}`);
+      res.redirect(`http://localhost:3000/onboarding?userId=${req.user._id}&teamId=${invitation.teamId._id}`);
     } else if (!user.isOnboarded) {
       // New user, needs to complete onboarding
-      res.redirect(`https://jlug-lenscape-event-frontend.vercel.app/onboarding?userId=${user._id}`);
+      res.redirect(`http://localhost:3000/onboarding?userId=${req.user._id}`);
     } else {
       // User is already onboarded
       return res.redirect(`https://jlug-lenscape-event-frontend.vercel.app//onboarding?userId=${req.user._id}`);

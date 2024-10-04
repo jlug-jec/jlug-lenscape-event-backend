@@ -6,10 +6,11 @@ const teamSchema = new mongoose.Schema({
   teamMembers: [
     {
       type: mongoose.Schema.Types.ObjectId, 
-      ref: 'User'
+      ref: 'User',
+      unique:true
     }
   ],
-  teamLeader: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  teamLeader: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true ,unique:true},
   invitations: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Invitation' }],
   posts: [
     {
