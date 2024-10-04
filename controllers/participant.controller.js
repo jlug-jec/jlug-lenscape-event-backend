@@ -15,7 +15,8 @@ exports.onboardedUser= async (req, res) => {
   
   try {
     const { id, branch, isParticipant,collegeName } = req.body;
-
+   console.log("USER ONBOARDING")
+    console.log(req.body)
     // Update user with onboarding data
     const user = await User.findByIdAndUpdate(
       id,
@@ -51,7 +52,7 @@ exports.onboardTeam = async (req, res) => {
    
    console.log("TEAM ONBOARDING")
     console.log(req.body)
-    const { teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = await req.body;
+    const { id,teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = await req.body;
      console.log(teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant,id)
     if(isParticipant==false){
       this.onboardedUser(req,res);
