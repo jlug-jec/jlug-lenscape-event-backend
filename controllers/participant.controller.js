@@ -49,9 +49,10 @@ exports.onboardedUser= async (req, res) => {
 exports.onboardTeam = async (req, res) => {
   try {
    
-
-    const { teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = req.body;
-     
+   console.log("TEAM ONBOARDING")
+    console.log(req.body)
+    const { teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = await req.body;
+     console.log(teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant,id)
     if(isParticipant==false){
       this.onboardedUser(req,res);
       return
