@@ -22,7 +22,7 @@ exports.googleCallback = async (req, res) => {
       res.redirect(`${frontend_url}/onboarding?userId=${user._id}`);
     } else {
       // User is already onboarded
-      return res.redirect(`${frontend_url}//onboarding?userId=${req.user._id}`);
+      return res.redirect(`${frontend_url}/onboarding?userId=${req.user._id}`);
     }
   } catch (error) {
     console.error('Error in Google callback:', error);
