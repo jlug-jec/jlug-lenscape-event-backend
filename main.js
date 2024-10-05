@@ -11,11 +11,16 @@ require('./config/passport')(passport);
 
 const app = express();
 
+const allowed_host = process.env.HOST || 'localhost:3000';
+const allowedOrigins = allowed_host.split(',').map(host => host.trim());
 // Middleware
 app.use(express.json());
 app.use(cookieParser());
 app.use(passport.initialize());
-const allowedOrigins = ['http://localhost:3000', 'https://jlug-lenscape-event-frontend.vercel.app'];
+
+
+
+
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin || allowedOrigins.includes(origin)) {
