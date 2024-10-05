@@ -1,7 +1,7 @@
 const User = require('../models/user.model'); // Updated to refer to User model
 const Team = require('../models/team.model');
 const Invitation = require('../models/invitation.model');
-const sendEmail = require('../config/email');
+const {sendEmail} = require('../config/email');
 const {createPost} = require('../controllers/post.controller');
 
 const checkDrivelink = require('../config/checkDrive'); 
