@@ -33,7 +33,7 @@ exports.onboardedUser= async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
    
-    const htmlContent = generateVoterHTML(userName=user.name, "https://jlug.club.lenscape/countdown");
+    const htmlContent = generateVoterHTML(userName=user.name, "https://lenscape.jlug.club/countdown");
 
     await sendEmail({
       email: user.email,
@@ -141,7 +141,9 @@ exports.onboardTeam = async (req, res) => {
 }
 exports.joinTeam = async (req, res) => {
   try {
-    const { id, teamId,branch } = req.body;
+    console.log("JOIN TEAM")
+    console.log(req.body)
+    const { id, teamId,branch,collegeName } = req.body;
     console.log(id,teamId)
     const user = await User.findById(id);
     const team = await Team.findById(teamId);
@@ -170,11 +172,11 @@ exports.joinTeam = async (req, res) => {
     // Remove the invitation
     await Invitation.findByIdAndDelete(invitation._id);
     await sendEmail({
-      email: user.email,
-      subject: 'Lenscape 2024',
-      html:generatePartipantEmail(teamName)
-    });
-
+          email: user.email,
+          subject: 'Lenscape 2024 - Countdown Begins',
+          html:generatePartipantHTML(userName=user.name,teamName=team.teamName,teamPageLink="jlug.club.lenscape/profile")
+        });
+    
     res.status(200).json({ message: 'User joined the team successfully', user });
   } catch (error) {
     console.error('Error joining team:', error);
@@ -197,11 +199,11 @@ exports.getUserDetails = async (req, res) => {
     }
 
     // Check for pending invitations
-    const invitation = await Invitation.findOne({ email: user.email }).populate('teamId');
+    const invitation = await Invitation.findOne({ email: user.email });
     
     res.status(200).json({
       ...user.toObject(),
-      pendingInvitation: invitation ? { teamId: invitation.teamId._id } : null
+      pendingInvitation: invitation ? { teamId: invitation.teamId } : null
     });
   } catch (error) {
     console.error('Error fetching user details:', error);
@@ -259,6 +261,5 @@ exports.getInvitationsByTeamId = async (req, res) => {
     res.status(500).json({ message: 'Internal server error' });
   }
 };
-
 
 
