@@ -174,7 +174,7 @@ exports.joinTeam = async (req, res) => {
     await sendEmail({
           email: user.email,
           subject: 'Lenscape 2024 - Countdown Begins',
-          html:generatePartipantHTML(userName=user.name,teamName=team.teamName,teamPageLink="jlug.club.lenscape/profile")
+          html:generatePartipantHTML(userName=user.name,teamName=team.teamName,teamPageLink="lenscape.jlug.club/profile")
         });
     
     res.status(200).json({ message: 'User joined the team successfully', user });

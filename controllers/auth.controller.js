@@ -1,7 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/user.model');
 const Invitation = require('../models/invitation.model');
-load
 require('dotenv').config();
 require('./config/passport')(passport);
 
