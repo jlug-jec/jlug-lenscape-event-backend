@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/user.model');
 const Invitation = require('../models/invitation.model');
 load
+require('dotenv').config();
+require('./config/passport')(passport);
 
 frontend_url=process.env.FRONTEND_URL || "http://localhost:3000"
 
