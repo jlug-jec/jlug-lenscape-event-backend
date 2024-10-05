@@ -114,14 +114,14 @@ exports.onboardTeam = async (req, res) => {
         await sendEmail({
           email: member.email,
           subject: 'Lenscape 2024 - Countdown Begins',
-          html:generatePartipantHTML(userName=member.name,teamName,teamPageLink="jlug.club.lenscape/profile")
+          html:generatePartipantHTML(userName=member.name,teamName,teamPageLink="lenscape.jlug.club/profile")
         });
       } else {
         // If the member doesn't have a userId, send an invitation email
         await sendEmail({
           email: member.email,
           subject: 'Lenscape 2024',
-          html:generateInvitationHTML(teamName,"jlug.club.lenscape")
+          html:generateInvitationHTML(teamName,"lenscape.jlug.club")
         });
 
         const invitation = new Invitation({
