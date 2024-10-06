@@ -7,7 +7,7 @@ const checkLink = require('../config/checkDrive');
 
 
 async function createPost(postDetails) {
-
+ console.log("POST DETAILS")
   const newPost = new Post({
     title: postDetails.title,
     url: postDetails.url,
@@ -16,18 +16,20 @@ async function createPost(postDetails) {
     type: postDetails.type,
     teamName: postDetails.teamName,
   });
-  console.log(newPost)
+
 
   try {
 
 
 
     await newPost.save();
+    console.log("POST DETAILS")
 
     // Update the associated team with the new post's ID
     await Team.findByIdAndUpdate(postDetails.teamId, {
       $push: { posts: newPost._id } // Add the post ID to the team's posts array
     });
+  console.log("adding here")
 
     return newPost;
   } catch (error) {

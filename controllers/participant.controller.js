@@ -54,7 +54,7 @@ exports.onboardTeam = async (req, res) => {
     const { id,teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = await req.body;
     const team = await Team.findOne({ teamName });
     if (team) {
-      return res.status(420).json({ message: 'Team name already exists' });
+      
     }
 
 
@@ -77,23 +77,23 @@ exports.onboardTeam = async (req, res) => {
   
     // Filter valid team members (those with userIds)
     const validTeamMembers = teamMembers.filter(member => member.userId);
-     console.log(validTeamMembers)
-     
-     const existingTeams = await Team.find({
-      teamMembers: { $in: validTeamMembers.map(member => member.userId) }
-    }).exec();
 
-    // Check if any team members are already assigned to a team
-    if (existingTeams.length > 0) {
-      res.status(420).json({ message: 'One or more team members are already in another team.' });
-      throw new Error('One or more team members are already in another team.');
-    }   
+    for (const member of teamMembers) {
+      const user=await User.findOne({email:member.email});  
+      if(user && user.team) return res.status(420).json({ message: `${member.email} is already in another team` });
+  
+    }
+       
+
+  
     // Create the team with valid members
     const newTeam = new Team({
       teamName,
       teamMembers: validTeamMembers.map(member => member.userId),
       teamLeader: teamLeader.userId,
     });
+    
+    await newTeam.save();
     for (const post of posts) {
   
       const postPayload={
@@ -107,8 +107,6 @@ exports.onboardTeam = async (req, res) => {
       const postMetaData = await createPost(postPayload);
       console.log(postMetaData)
     }
-
-    await newTeam.save();
 
     
     // Create posts
