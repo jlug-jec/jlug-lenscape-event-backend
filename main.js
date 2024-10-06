@@ -18,19 +18,24 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(passport.initialize());
 
+console.log(allowedOrigins)
 
+console.log('Allowed Origins:', allowedOrigins);
 
+const corsOptions = {
+  origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps, curl requests)
+      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+          callback(null, true); // Allow the origin
+      } else {
+          callback(new Error('Not allowed by CORS')); // Deny the origin
+      }
+  },
+  credentials: true,
+};
 
-app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true
-}));
+app.use(cors(corsOptions));
+
 
 // Routes
 app.use('/auth', authRoutes);
