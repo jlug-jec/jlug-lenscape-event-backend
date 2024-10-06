@@ -1,6 +1,5 @@
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/user.model'); // Adjust the path as needed
-
 module.exports = function (passport) {
   passport.use(
     new GoogleStrategy(
@@ -11,11 +10,10 @@ module.exports = function (passport) {
       },
       async (accessToken, refreshToken, profile, done) => {
         try {
-          // Find or create a user in the database
-          console.log(profile.id);
           let user = await User.findOne({ googleId: profile.id });
-          console.log(user)
+
           if (!user) {
+            // Create a new user if not found
             user = new User({
               googleId: profile.id,
               name: profile.displayName,
@@ -24,7 +22,21 @@ module.exports = function (passport) {
             });
             await user.save();
           }
-          return done(null, user);
+
+          // If the user already exists, check if they have a valid refresh token
+          let newRefreshToken;
+          if (!user.refreshToken || isTokenExpired(user.refreshToken)) {
+            newRefreshToken = user.generateRefreshToken();
+            user.refreshToken = newRefreshToken;
+            await user.save();
+          } else {
+            newRefreshToken = user.refreshToken;
+          }
+
+          // Generate JWT for this session
+          const jwtToken = user.generateJwtToken();
+
+          return done(null, { user, jwtToken, refreshToken: newRefreshToken });
         } catch (err) {
           console.error(err);
           return done(err, false);
@@ -32,18 +44,14 @@ module.exports = function (passport) {
       }
     )
   );
-
-  // Serialize and deserialize user (for session management)
-  passport.serializeUser((user, done) => {
-    done(null, user.id);
-  });
-
-  passport.deserializeUser(async (id, done) => {
-    try {
-      const user = await User.findById(id);
-      done(null, user);
-    } catch (err) {
-      done(err, null);
-    }
-  });
 };
+
+// Helper function to check if refresh token is expired
+function isTokenExpired(token) {
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+    return false; // Token is valid
+  } catch (err) {
+    return true; // Token is expired or invalid
+  }
+}

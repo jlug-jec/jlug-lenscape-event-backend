@@ -1,138 +1,95 @@
-const https = require('https');
-const { URL } = require('url');
+const API_KEY = process.env.GOOGLE_DRIVE_API_KEY;
 
-class DriveFileTypeChecker {
-    extractFileId(driveLink) {
-        const patterns = [
-            /\/file\/d\/([a-zA-Z0-9-_]+)/,
-            /id=([a-zA-Z0-9-_]+)/,
-            /\/open\?id=([a-zA-Z0-9-_]+)/
-        ];
+const extractGoogleDriveFileId = (url) => {
+  const regex = /(?:\/d\/|id=)([a-zA-Z0-9_-]+)/;
+  const match = url.match(regex);
+  return match ? match[1] : null;
+};
 
-        for (const pattern of patterns) {
-            const match = driveLink.match(pattern);
-            if (match && match[1]) {
-                return match[1];
-            }
-        }
-        return null;
+const isYoutubeUrl = (url) => {
+  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
+  return youtubeRegex.test(url);
+};
+
+async function checkLink(url) {
+  if (!url) {
+    return { 
+      success: false,
+      message: 'No URL provided' 
+    };
+  }
+
+  // Check if it's a YouTube URL
+  if (isYoutubeUrl(url)) {
+    return {
+      success: true,
+      data: {
+        type: 'video',
+        url: url
+      }
+    };
+  }
+
+  // Handle Google Drive URLs
+  const fileId = extractGoogleDriveFileId(url);
+  if (!fileId) {
+    return { 
+      success: false,
+      message: 'Invalid URL format - not a YouTube or Google Drive URL' 
+    };
+  }
+
+  try {
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?key=${API_KEY}`,
+      {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    const data = await response.json();
+
+    // Handle error response
+    if (data.error) {
+      if (data.error.code === 404) {
+        return {
+          success: false,
+          message: 'File does not exist or is private'
+        };
+      }
+      return {
+        success: false,
+        message: `Drive API Error: ${data.error.message}`
+      };
     }
 
-    makeRequest(url, options = {}) {
-        return new Promise((resolve, reject) => {
-            const req = https.get(url, {
-                ...options,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                    'Accept': '*/*',
-                    ...options.headers
-                }
-            }, (res) => {
-                let data = '';
-                res.on('data', (chunk) => { data += chunk; });
-                res.on('end', () => resolve({ response: res, body: data }));
-            });
-
-            req.on('error', reject);
-            req.end();
-        });
+    // Handle successful response
+    if (data.id && data.mimeType) {
+      return {
+        success: true,
+        data: {
+          type: 'drive',
+          fileId: data.id,
+          mimeType: data.mimeType,
+          fileName: data.name
+        }
+      };
     }
 
-    async getFileType(driveLink) {
-        try {
-            const fileId = this.extractFileId(driveLink);
-            if (!fileId) {
-                return { message: 'Invalid Drive link' };
-            }
-
-            const largeFileUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
-            const { response, body } = await this.makeRequest(largeFileUrl);
-            console.log(body)
-            if (body.includes('video-player') || body.includes('drive-viewer-video-player')) {
-                return {
-                    message: 'Valid video',
-                    fileId: fileId,
-                    url: `https://drive.google.com/uc?export=download&id=${fileId}`
-                };
-            }
-
-            if (response.headers.location) {
-                const redirectUrl = new URL(response.headers.location);
-                const finalResponse = await this.makeRequest(redirectUrl);
-                return this.processResponse(finalResponse, fileId);
-            }
-
-            const regularUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-            const regularResponse = await this.makeRequest(regularUrl);
-
-            if (regularResponse.headers.location) {
-                const redirectUrl = new URL(regularResponse.headers.location);
-                const finalResponse = await this.makeRequest(redirectUrl);
-                
-                return this.processResponse(finalResponse, fileId);
-            }
-           
-            return this.processResponse({ response, body }, fileId);
-
-        } catch (error) {
-            return { message: 'Error checking link: ' + error.message };
-        }
-    }
-
-    processResponse({ response, body }, fileId) {
-        const contentType = response.headers['content-type'];
-        
-        if (response.statusCode === 403 || response.statusCode === 401) {
-                console.log("PRIVATE")
-                console.log(body)
-            return { message: 'Image/video is private' };
-        }
-        if (contentType && contentType.includes('text/html') && body.includes('.mp4') ) {
-            return {
-                message: 'Valid video',
-                isPublic:true,
-                fileId: fileId,
-                type:"video",
-                url: `https://drive.google.com/uc?export=download&id=${fileId}`
-             };
-        }
-        
-        if (contentType) {
-            if (contentType.startsWith('image/')) {
-                return {
-                    message: 'Valid image',
-                    isPublic:true,
-                    type:"image",
-                    fileId: fileId,
-                    url: `https://drive.google.com/uc?export=download&id=${fileId}`
-                };
-            }
-            if (contentType.startsWith('video/')) {
-                return {
-                    message: 'Valid video',
-                    isPublic:true,
-                    type:"video",
-                    fileId: fileId,
-                    url: `https://drive.google.com/uc?export=download&id=${fileId}`
-                };
-            }
-        }
-        
-        return { message: 'File is not in image/video format',isPublic:false };
-    }
+    return {
+      success: false,
+      message: 'Unexpected response format from Google Drive API'
+    };
+  } catch (error) {
+    console.error('Error checking link:', error);
+    return {
+      success: false,
+      message: 'Failed to verify link: Network or server error'
+    };
+  }
 }
 
-async function checkDrivelink(url) {
-
-    const checker = new DriveFileTypeChecker();
-
-    try {
-        const result = await checker.getFileType(url);
-        return result;
-    } catch (error) {
-        console.error('Error checking link:', error);
-        return { message: 'Error checking accessibility: ' + error.message };
-    }
-}
-
-module.exports = checkDrivelink;
+module.exports = checkLink;
