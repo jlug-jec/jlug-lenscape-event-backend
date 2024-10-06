@@ -13,15 +13,27 @@ const userSchema = new mongoose.Schema({
   isParticipant: { type: Boolean, default: false }, 
   team: { type: mongoose.Schema.Types.ObjectId, ref: 'Team' },
   isTeamLeader: { type: Boolean, default: false }, 
+  createdAt: { type: Date, default: Date.now },
+  refreshToken: { type: String },
 });
 
 
-userSchema.methods.generateJwtToken = function() {
+userSchema.methods.generateJwtToken = function () {
   return jwt.sign(
     { id: this._id, email: this.email }, // Payload
     process.env.JWT_SECRET, // Secret key
-    { expiresIn: '1h' } // Expiration time
+    { expiresIn: '1h' } // Access token expiration time
   );
+};
+
+userSchema.methods.generateRefreshToken = function () {
+  const refreshToken = jwt.sign(
+    { id: this._id }, 
+    process.env.REFRESH_TOKEN_SECRET, 
+    { expiresIn: '14d' } 
+  );
+  this.refreshToken = refreshToken; // Save the refresh token in the database
+  return refreshToken;
 };
 
 

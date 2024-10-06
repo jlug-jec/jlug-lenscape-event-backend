@@ -7,6 +7,7 @@ const {createPost} = require('../controllers/post.controller');
 const checkDrivelink = require('../config/checkDrive'); 
 const {generateInvitationHTML,generatePartipantHTML,generateVoterHTML}=require('../templates/invitation');
 const { post } = require('../routes/auth.route');
+const { parse } = require('dotenv');
 // Get posts for a participant
 
 // Submit a post for a participant
@@ -15,8 +16,8 @@ exports.onboardedUser= async (req, res) => {
   
   try {
     const { id, branch, isParticipant,collegeName } = req.body;
-   console.log("USER ONBOARDING")
-    console.log(req.body)
+    console.log(isParticipant)
+    if (isParticipant==false) return 
     // Update user with onboarding data
     const user = await User.findByIdAndUpdate(
       id,
@@ -28,7 +29,7 @@ exports.onboardedUser= async (req, res) => {
       },
       { new: true } // Return the updated user
     );
-    
+    console.log(user)
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -187,8 +188,8 @@ exports.joinTeam = async (req, res) => {
 exports.getUserDetails = async (req, res) => {
   try {
     const { userId } = req.params;
-    console.log("USER DETAILS")
-    console.log(userId)
+
+
     if (!userId) {
       return res.status(400).json({ message: 'User ID is required' });
     }
@@ -213,11 +214,12 @@ exports.getUserDetails = async (req, res) => {
 
 exports.getTeamDetails = async (req, res) => {
   try {
-
-    const { teamId } = req.params;
-    console.log(teamId)
-    const team = await Team.findById(teamId).populate('teamMembers', 'name email picture').populate('invitations');
     console.log("TEAM DETAILS")
+    let { teamId } = req.params;
+    console.log(teamId)
+   
+    const team = await Team.findById(teamId).populate('teamMembers', 'name email picture').populate('invitations');
+ 
     console.log(team)
     if (!team) {
       return res.status(404).json({ message: 'Team not found' });
@@ -237,9 +239,10 @@ exports.getInvitationsByTeamId = async (req, res) => {
   try {
     const { teamId } = req.params;
     console.log("TEAM ID", teamId);
+  
     
     // Find the team to ensure it exists
-    const team = await Team.findById(teamId).populate('teamMembers');
+    const team = await Team.findById({_id:teamId}).populate('teamMembers');
     if (!team) {
       return res.status(404).json({ message: 'Team not found' });
     }

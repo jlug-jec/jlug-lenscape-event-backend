@@ -24,9 +24,8 @@ const convertToDirectDownloadUrl = (url) => {
   return url; // Return the original URL if conversion fails
 };
 
-exports.createPost=async function createPost(postDetails) {
-  console.log("jiii")
-  console.log(postDetails)
+async function createPost(postDetails) {
+
   const newPost = new Post({
     title: postDetails.title,
     url: postDetails.url,
@@ -55,20 +54,29 @@ exports.createPost=async function createPost(postDetails) {
   }
 }
 
-
+exports.createPost=createPost
 
 
 // Create a new post
 exports.createPostController = async (req, res) => {
   try {
     const postDetails = req.body;
+    console.log("POST DETAILS")
+    console.log("\n\n\n\n\n\n")
     console.log(postDetails)
+    console.log("\n\n\n\n\n\n")
     const result=await checkDrivelink(postDetails.url)
-    if(result.isPublic==false){
-      return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
-  }
+
+    if(result.success==false){  
+      return res.status(400).json({ message: result.message });
+      
+    }
    
-    // Call the createPost function from the service
+    console.log(result)
+    postDetails.fileId=result.data.fileId
+    postDetails.type=result.data.mimeType;
+
+    console.log(postDetails)
     const newPost = await createPost(postDetails);
     
 
@@ -90,7 +98,7 @@ exports.createPostController = async (req, res) => {
 async function editPost(postId, postDetails) {
 
   postDetails.url = convertToDirectDownloadUrl(postDetails.url);
-  console.log(postDetails.url)
+
   const updatedPost = await Post.findByIdAndUpdate(
     postDetails._id,
     {
@@ -111,16 +119,23 @@ exports.editPostController = async (req, res) => {
   try {
     const postId = req.params.id;
     const postDetails = req.body;
-    console.log(postDetails,postId)
+   
     const result=await checkDrivelink(postDetails.url)
-    console.log(result)
-    if(result.isPublic==false){
-      return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
-    }
-    console.log("here")
 
-    // Call the editPost function from the service
+    if(result.success==false){  
+      return res.status(400).json({ message: result.message });
+      
+    }
+    console.log(postDetails)
+    postDetails.fileId=result.data.fileId
+    postDetails.type=result.data.mimeType;
+    console.log("POST DETAILS")
+    console.log("\n\n\n\n\n\n")
+    console.log(postDetails)
+    console.log("\n\n\n\n\n\n")
     const updatedPost = await editPost(postId, postDetails);
+
+
 
     if (!updatedPost) {
       return res.status(404).json({ message: 'Post not found' });

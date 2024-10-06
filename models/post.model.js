@@ -19,6 +19,9 @@ const postSchema = new mongoose.Schema({
     type: String, 
     required: true 
   }, 
+  fileId:{
+    type:String
+  },
   type: { 
     type: String, 
     required: true 
