@@ -24,7 +24,7 @@ async function checkLink(url) {
     return {
       success: true,
       data: {
-        type: 'video',
+        mimeType: 'video',
         url: url
       }
     };
