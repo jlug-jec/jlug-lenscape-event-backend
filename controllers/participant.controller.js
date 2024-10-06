@@ -6,8 +6,8 @@ const {createPost} = require('../controllers/post.controller');
 
 const checkLink = require('../config/checkDrive'); 
 const {generateInvitationHTML,generatePartipantHTML,generateVoterHTML}=require('../templates/invitation');
-const { post } = require('../routes/auth.route');
-const { parse } = require('dotenv');
+
+
 // Get posts for a participant
 
 // Submit a post for a participant
