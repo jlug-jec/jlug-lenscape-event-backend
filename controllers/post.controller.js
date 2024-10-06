@@ -2,27 +2,9 @@
 const Post = require('../models/post.model');
 const User = require('../models/user.model');
 const Team=require('../models/team.model')
-const checkDrivelink = require('../config/checkDrive'); 
+const checkLink = require('../config/checkDrive'); 
 
-const convertToDirectDownloadUrl = (url) => {
-  // Check if the URL is already in the required format
-  const regex = /https:\/\/drive\.google\.com\/uc\?id=([a-zA-Z0-9_-]+)/;
-  if (regex.test(url)) {
-      return url; // Return the URL if it's already in the correct format
-  }
-  
-  // Extract the file ID from the original URL
-  const idMatch = url.match(/d\/([a-zA-Z0-9_-]+)/);
-  if (idMatch && idMatch[1]) {
-      const fileId = idMatch[1];
-      // Return the direct download URL
-      return `https://drive.google.com/uc?id=${fileId}`;
-  }
-  
-  // If the URL is not valid, return the original URL or handle accordingly
-  console.error("Invalid Google Drive URL:", url);
-  return url; // Return the original URL if conversion fails
-};
+
 
 async function createPost(postDetails) {
 
@@ -65,7 +47,7 @@ exports.createPostController = async (req, res) => {
     console.log("\n\n\n\n\n\n")
     console.log(postDetails)
     console.log("\n\n\n\n\n\n")
-    const result=await checkDrivelink(postDetails.url)
+    const result=await checkLink(postDetails.url)
 
     if(result.success==false){  
       return res.status(400).json({ message: result.message });
@@ -97,8 +79,6 @@ exports.createPostController = async (req, res) => {
 
 async function editPost(postId, postDetails) {
 
-  postDetails.url = convertToDirectDownloadUrl(postDetails.url);
-
   const updatedPost = await Post.findByIdAndUpdate(
     postDetails._id,
     {
@@ -106,7 +86,7 @@ async function editPost(postId, postDetails) {
       url: postDetails.url,
       teamId: postDetails.teamId,
       domain: postDetails.category,
-      type: postDetails.mediaType,
+      type: postDetails.type,
       teamName: postDetails.teamName,
     },
     { new: true }
@@ -120,7 +100,7 @@ exports.editPostController = async (req, res) => {
     const postId = req.params.id;
     const postDetails = req.body;
    
-    const result=await checkDrivelink(postDetails.url)
+    const result=await checkLink(postDetails.url)
 
     if(result.success==false){  
       return res.status(400).json({ message: result.message });
@@ -134,6 +114,7 @@ exports.editPostController = async (req, res) => {
     console.log(postDetails)
     console.log("\n\n\n\n\n\n")
     const updatedPost = await editPost(postId, postDetails);
+    console.log(updatedPost)
 
 
 
