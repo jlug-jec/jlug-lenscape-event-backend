@@ -5,8 +5,7 @@ const jwt = require('jsonwebtoken');
 
 
 frontend_url=process.env.FRONTEND_URL || "http://localhost:3000"
-console.log(frontend_url)
-frontend_url="https://b00e-103-199-225-144.ngrok-free.app"
+
 const tempAuthCodes = new Map();
 
 
