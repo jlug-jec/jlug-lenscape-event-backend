@@ -16,8 +16,6 @@ exports.onboardedUser= async (req, res) => {
   
   try {
     const { id, branch, isParticipant,collegeName } = req.body;
-    console.log(isParticipant)
-    if (isParticipant==false) return 
     // Update user with onboarding data
     const user = await User.findByIdAndUpdate(
       id,
