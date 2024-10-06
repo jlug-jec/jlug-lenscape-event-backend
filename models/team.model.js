@@ -2,7 +2,12 @@ const mongoose = require('mongoose');
 
 // Define the team schema
 const teamSchema = new mongoose.Schema({
-  teamName: { type: String, required: true }, 
+  _id: {
+    type: mongoose.Schema.Types.ObjectId, // Keep _id as ObjectId for existing data
+    required: true,
+    auto: true, // Let MongoDB auto-generate ObjectId
+  },
+  teamName: { type: String, required: true,unique:true }, 
   teamMembers: [
     {
       type: mongoose.Schema.Types.ObjectId, 

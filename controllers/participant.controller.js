@@ -4,9 +4,10 @@ const Invitation = require('../models/invitation.model');
 const {sendEmail} = require('../config/email');
 const {createPost} = require('../controllers/post.controller');
 
-const checkDrivelink = require('../config/checkDrive'); 
+const checkLink = require('../config/checkDrive'); 
 const {generateInvitationHTML,generatePartipantHTML,generateVoterHTML}=require('../templates/invitation');
-const { post } = require('../routes/auth.route');
+
+
 // Get posts for a participant
 
 // Submit a post for a participant
@@ -15,8 +16,6 @@ exports.onboardedUser= async (req, res) => {
   
   try {
     const { id, branch, isParticipant,collegeName } = req.body;
-   console.log("USER ONBOARDING")
-    console.log(req.body)
     // Update user with onboarding data
     const user = await User.findByIdAndUpdate(
       id,
@@ -28,7 +27,7 @@ exports.onboardedUser= async (req, res) => {
       },
       { new: true } // Return the updated user
     );
-    
+    console.log(user)
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -51,41 +50,52 @@ exports.onboardTeam = async (req, res) => {
   try {
    
    console.log("TEAM ONBOARDING")
-    console.log(req.body)
+  
     const { id,teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = await req.body;
-     console.log(teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant,id)
+    const team = await Team.findOne({ teamName });
+    if (team) {
+      
+    }
+
+
     if(isParticipant==false){
       this.onboardedUser(req,res);
       return
 
     }
     for (let post of posts){
-      const result=await checkDrivelink(post.link)
-      post.mediaType=result.type;
-      if(result.isPublic==false){
-        return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
-    }
+      
+      const result=await checkLink(post.link)
+      console.log(result)
+      if(result.success==false){  
+        
+        return res.status(400).json({ message: result.message+` for ${post.link}` });
+        
+      }
+      post.type=result.data.mimeType; ;
   }
-    console.log("TEAM ONBOARDING")
-    console.log(posts)
-   
-
-   
-
+  
     // Filter valid team members (those with userIds)
     const validTeamMembers = teamMembers.filter(member => member.userId);
-     
+
+    for (const member of teamMembers) {
+      const user=await User.findOne({email:member.email});  
+      if(user && user.team) return res.status(420).json({ message: `${member.email} is already in another team` });
+  
+    }
+       
+
+  
     // Create the team with valid members
     const newTeam = new Team({
       teamName,
       teamMembers: validTeamMembers.map(member => member.userId),
       teamLeader: teamLeader.userId,
     });
-
-    await newTeam.save();
     
-    // Create posts
+    await newTeam.save();
     for (const post of posts) {
+  
       const postPayload={
         title: post.title,
         url: post.link,
@@ -98,6 +108,9 @@ exports.onboardTeam = async (req, res) => {
       console.log(postMetaData)
     }
 
+    
+    // Create posts
+  
     // Loop through all team members to send invitations if needed
     for (const member of teamMembers) {
 
@@ -187,8 +200,8 @@ exports.joinTeam = async (req, res) => {
 exports.getUserDetails = async (req, res) => {
   try {
     const { userId } = req.params;
-    console.log("USER DETAILS")
-    console.log(userId)
+
+
     if (!userId) {
       return res.status(400).json({ message: 'User ID is required' });
     }
@@ -213,11 +226,12 @@ exports.getUserDetails = async (req, res) => {
 
 exports.getTeamDetails = async (req, res) => {
   try {
-
-    const { teamId } = req.params;
-    console.log(teamId)
-    const team = await Team.findById(teamId).populate('teamMembers', 'name email picture').populate('invitations');
     console.log("TEAM DETAILS")
+    let { teamId } = req.params;
+    console.log(teamId)
+   
+    const team = await Team.findById(teamId).populate('teamMembers', 'name email picture').populate('invitations');
+ 
     console.log(team)
     if (!team) {
       return res.status(404).json({ message: 'Team not found' });
@@ -237,9 +251,10 @@ exports.getInvitationsByTeamId = async (req, res) => {
   try {
     const { teamId } = req.params;
     console.log("TEAM ID", teamId);
+  
     
     // Find the team to ensure it exists
-    const team = await Team.findById(teamId).populate('teamMembers');
+    const team = await Team.findById({_id:teamId}).populate('teamMembers');
     if (!team) {
       return res.status(404).json({ message: 'Team not found' });
     }

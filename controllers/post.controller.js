@@ -2,31 +2,12 @@
 const Post = require('../models/post.model');
 const User = require('../models/user.model');
 const Team=require('../models/team.model')
-const checkDrivelink = require('../config/checkDrive'); 
+const checkLink = require('../config/checkDrive'); 
 
-const convertToDirectDownloadUrl = (url) => {
-  // Check if the URL is already in the required format
-  const regex = /https:\/\/drive\.google\.com\/uc\?id=([a-zA-Z0-9_-]+)/;
-  if (regex.test(url)) {
-      return url; // Return the URL if it's already in the correct format
-  }
-  
-  // Extract the file ID from the original URL
-  const idMatch = url.match(/d\/([a-zA-Z0-9_-]+)/);
-  if (idMatch && idMatch[1]) {
-      const fileId = idMatch[1];
-      // Return the direct download URL
-      return `https://drive.google.com/uc?id=${fileId}`;
-  }
-  
-  // If the URL is not valid, return the original URL or handle accordingly
-  console.error("Invalid Google Drive URL:", url);
-  return url; // Return the original URL if conversion fails
-};
 
-exports.createPost=async function createPost(postDetails) {
-  console.log("jiii")
-  console.log(postDetails)
+
+async function createPost(postDetails) {
+ console.log("POST DETAILS")
   const newPost = new Post({
     title: postDetails.title,
     url: postDetails.url,
@@ -35,18 +16,20 @@ exports.createPost=async function createPost(postDetails) {
     type: postDetails.type,
     teamName: postDetails.teamName,
   });
-  console.log(newPost)
+
 
   try {
 
 
 
     await newPost.save();
+    console.log("POST DETAILS")
 
     // Update the associated team with the new post's ID
     await Team.findByIdAndUpdate(postDetails.teamId, {
       $push: { posts: newPost._id } // Add the post ID to the team's posts array
     });
+  console.log("adding here")
 
     return newPost;
   } catch (error) {
@@ -55,20 +38,29 @@ exports.createPost=async function createPost(postDetails) {
   }
 }
 
-
+exports.createPost=createPost
 
 
 // Create a new post
 exports.createPostController = async (req, res) => {
   try {
     const postDetails = req.body;
+    console.log("POST DETAILS")
+    console.log("\n\n\n\n\n\n")
     console.log(postDetails)
-    const result=await checkDrivelink(postDetails.url)
-    if(result.isPublic==false){
-      return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
-  }
+    console.log("\n\n\n\n\n\n")
+    const result=await checkLink(postDetails.url)
+
+    if(result.success==false){  
+      return res.status(400).json({ message: result.message });
+      
+    }
    
-    // Call the createPost function from the service
+    console.log(result)
+    postDetails.fileId=result.data.fileId
+    postDetails.type=result.data.mimeType;
+
+    console.log(postDetails)
     const newPost = await createPost(postDetails);
     
 
@@ -89,8 +81,6 @@ exports.createPostController = async (req, res) => {
 
 async function editPost(postId, postDetails) {
 
-  postDetails.url = convertToDirectDownloadUrl(postDetails.url);
-  console.log(postDetails.url)
   const updatedPost = await Post.findByIdAndUpdate(
     postDetails._id,
     {
@@ -98,7 +88,7 @@ async function editPost(postId, postDetails) {
       url: postDetails.url,
       teamId: postDetails.teamId,
       domain: postDetails.category,
-      type: postDetails.mediaType,
+      type: postDetails.type,
       teamName: postDetails.teamName,
     },
     { new: true }
@@ -111,16 +101,24 @@ exports.editPostController = async (req, res) => {
   try {
     const postId = req.params.id;
     const postDetails = req.body;
-    console.log(postDetails,postId)
-    const result=await checkDrivelink(postDetails.url)
-    console.log(result)
-    if(result.isPublic==false){
-      return res.status(400).json({ message: `Drive link is not public for ${result.url}` });
-    }
-    console.log("here")
+   
+    const result=await checkLink(postDetails.url)
 
-    // Call the editPost function from the service
+    if(result.success==false){  
+      return res.status(400).json({ message: result.message });
+      
+    }
+    console.log(postDetails)
+    postDetails.fileId=result.data.fileId
+    postDetails.type=result.data.mimeType;
+    console.log("POST DETAILS")
+    console.log("\n\n\n\n\n\n")
+    console.log(postDetails)
+    console.log("\n\n\n\n\n\n")
     const updatedPost = await editPost(postId, postDetails);
+    console.log(updatedPost)
+
+
 
     if (!updatedPost) {
       return res.status(404).json({ message: 'Post not found' });

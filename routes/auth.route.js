@@ -1,6 +1,6 @@
 const express = require('express');
 const passport = require('passport');
-const { googleCallback } = require('../controllers/auth.controller');
+const { googleCallback,exchangeCode, regenerateJWT } = require('../controllers/auth.controller');
 const router = express.Router();
 
 // Redirect to Google for authentication
@@ -13,6 +13,10 @@ router.get(
    googleCallback
   );
   
+
+router.post('/exchange-code', exchangeCode);
+
+router.post('/regenerate-jwt',regenerateJWT);
 
 module.exports = router;
 
