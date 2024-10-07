@@ -4,7 +4,7 @@ require('dotenv').config();
 const jwt = require('jsonwebtoken');
 
 
-frontend_url=process.env.FRONTEND_URL || "http://localhost:3000"
+frontend_url=process.env.FRONTEND_URL ||  "http://localhost:3000"|| "http://localhost:3000"
 
 const tempAuthCodes = new Map();
 
@@ -37,13 +37,13 @@ exports.googleCallback = async (req, res) => {
    
     if (invitation) {
       res.redirect(`${frontend_url}/onboarding?code=${tempCode}&teamId=${invitation.teamId}`);
-    } else if (!user.user.isOnboarded) {
+    } else if (!user.user.isOnboarded || !user.user.isParticipant) {
       res.redirect(`${frontend_url}/onboarding?code=${tempCode}`);
     } else if(user.user.isParticipant){
       res.redirect(`${frontend_url}/onboarding?onboarded=true&code=${tempCode}`);
     }
     else{
-      res.redirect(`${frontend_url}/countdown`);
+      res.redirect(`${frontend_url}`);
     }
   } catch (error) {
     console.error('Error in Google callback:', error);
