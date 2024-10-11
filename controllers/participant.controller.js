@@ -54,7 +54,8 @@ exports.onboardTeam = async (req, res) => {
     const { id,teamName, teamMembers, teamLeader, branch, collegeName, posts,isParticipant } = await req.body;
     const team = await Team.findOne({ teamName });
     if (team) {
-      
+      console.log("TEAM ALREADY EXISTS")
+      return res.status(420).json({ message: `Team name is already taken` });
     }
 
 
