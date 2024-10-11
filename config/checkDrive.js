@@ -36,7 +36,7 @@ async function checkLink(url) {
   const fileId = extractGoogleDriveFileId(url);
   console.log("Checking file via google drive")
   console.log(url)
-  console.log(file)
+  console.log(fileId)
   if (!fileId) {
     return { 
       success: false,

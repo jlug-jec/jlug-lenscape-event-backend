@@ -125,18 +125,18 @@ exports.onboardTeam = async (req, res) => {
           collegeName: member.collegeName || collegeName,
           isOnboarded: true
         });
-        await sendEmail({
-          email: member.email,
-          subject: 'Lenscape 2024 - Countdown Begins',
-          html:generatePartipantHTML(userName=member.name,teamName,teamPageLink="lenscape.jlug.club/profile")
-        });
+        // await sendEmail({
+        //   email: member.email,
+        //   subject: 'Lenscape 2024 - Countdown Begins',
+        //   html:generatePartipantHTML(userName=member.name,teamName,teamPageLink="lenscape.jlug.club/profile")
+        // });
       } else {
         // If the member doesn't have a userId, send an invitation email
-        await sendEmail({
-          email: member.email,
-          subject: 'Lenscape 2024',
-          html:generateInvitationHTML(teamName,"lenscape.jlug.club")
-        });
+        // await sendEmail({
+        //   email: member.email,
+        //   subject: 'Lenscape 2024',
+        //   html:generateInvitationHTML(teamName,"lenscape.jlug.club")
+        // });
 
         const invitation = new Invitation({
           email: member.email,
@@ -185,11 +185,11 @@ exports.joinTeam = async (req, res) => {
 
     // Remove the invitation
     await Invitation.findByIdAndDelete(invitation._id);
-    await sendEmail({
-          email: user.email,
-          subject: 'Lenscape 2024 - Countdown Begins',
-          html:generatePartipantHTML(userName=user.name,teamName=team.teamName,teamPageLink="lenscape.jlug.club/profile")
-        });
+    // await sendEmail({
+    //       email: user.email,
+    //       subject: 'Lenscape 2024 - Countdown Begins',
+    //       html:generatePartipantHTML(userName=user.name,teamName=team.teamName,teamPageLink="lenscape.jlug.club/profile")
+    //     });
     
     res.status(200).json({ message: 'User joined the team successfully', user });
   } catch (error) {
