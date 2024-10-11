@@ -162,3 +162,53 @@ exports.getPosts = async (req, res) => {
     return res.status(500).json({ message: 'Internal Server Error' });
   }
 };
+
+exports.getAllPosts = async (req, res) => {
+  try {
+    const posts = await Post.find();
+
+    return res.status(200).json(posts);
+  } catch (error) {
+    console.error('Error fetching posts:', error);
+    return res.status(500).json({ message: 'Internal Server Error' });
+  }
+}
+
+
+exports.increaseVote = async (req, res) => {
+  try {
+   
+    const { postId } = req.params;
+    const { userId } = req.body;
+    console.log(postId,userId)
+
+    // Find the post
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({ message: 'Post not found' });
+    }
+    if (post.votes.includes(userId)) {
+      return res.status(400).json({ message: 'You have already voted for this post' });
+    }
+    
+
+    // Check if the user has already voted for this post
+
+    // Update the post's vote count
+    post.votes.push(userId)
+    console.log(post.votes)
+    await post.save();
+   
+    // Send a success response
+    return res.status(200).json({
+      message: 'Vote increased successfully',
+
+    });
+    } catch (error) {
+    console.error('Error increasing vote:', error);
+    return res.status(500).json({
+      message: 'Error increasing vote',
+      error: error.message,
+    });
+    }
+  };
