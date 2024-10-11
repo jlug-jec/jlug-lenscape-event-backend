@@ -1,3 +1,5 @@
+const { file } = require("googleapis/build/src/apis/file");
+
 const API_KEY = process.env.GOOGLE_DRIVE_API_KEY;
 
 const extractGoogleDriveFileId = (url) => {
@@ -32,6 +34,9 @@ async function checkLink(url) {
 
   // Handle Google Drive URLs
   const fileId = extractGoogleDriveFileId(url);
+  console.log("Checking file via google drive")
+  console.log(url)
+  console.log(file)
   if (!fileId) {
     return { 
       success: false,
@@ -54,15 +59,18 @@ async function checkLink(url) {
 
     // Handle error response
     if (data.error) {
+      console.log(data.error.code)
+      console.log(data.error.message)
       if (data.error.code === 404) {
         return {
           success: false,
           message: 'File does not exist or is private'
         };
       }
+      console.log(data.error.message)
       return {
         success: false,
-        message: `Drive API Error: ${data.error.message}`
+        message: `There was an error, please try again later`
       };
     }
 
