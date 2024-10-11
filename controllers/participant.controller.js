@@ -34,11 +34,11 @@ exports.onboardedUser= async (req, res) => {
    
     const htmlContent = generateVoterHTML(userName=user.name, "https://lenscape.jlug.club/countdown");
 
-    await sendEmail({
-      email: user.email,
-      subject: 'Lenscape 2024 - Countdown Begins',
-      html: htmlContent
-    });
+    // await sendEmail({
+    //   email: user.email,
+    //   subject: 'Lenscape 2024 - Countdown Begins',
+    //   html: htmlContent
+    // });
     res.status(200).json({ message: 'User onboarded successfully', user });
   } catch (error) {
     console.error(error);
