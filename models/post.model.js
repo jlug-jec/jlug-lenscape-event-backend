@@ -5,7 +5,6 @@ const postSchema = new mongoose.Schema({
   teamId: { // Add teamId to reference the Team model
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Team',
-    required: true
   },
   teamName: { 
     type: String, 

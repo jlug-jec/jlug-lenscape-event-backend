@@ -162,3 +162,100 @@ exports.getPosts = async (req, res) => {
     return res.status(500).json({ message: 'Internal Server Error' });
   }
 };
+
+exports.getAllPosts = async (req, res) => {
+  try {
+    const posts = await Post.find();
+
+    return res.status(200).json(posts);
+  } catch (error) {
+    console.error('Error fetching posts:', error);
+    return res.status(500).json({ message: 'Internal Server Error' });
+  }
+}
+
+
+exports.increaseVote = async (req, res) => {
+  try {
+   
+    const { postId } = req.params;
+    const { userId } = req.body;
+    console.log(postId,userId)
+
+    // Find the post
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({ message: 'Post not found' });
+    }
+    if (post.votes.includes(userId)) {
+      console.log("user has already voted")
+      return res.status(400).json({ message: 'You have already voted for this post' });
+    }
+    
+
+    // Update the post's vote count
+    post.votes.push(userId)
+
+    await post.save();
+   
+    // Send a success response
+    return res.status(200).json({
+      message: 'Vote increased successfully',
+
+    });
+    } catch (error) {
+    console.error('Error increasing vote:', error);
+    return res.status(500).json({
+      message: 'Error increasing vote',
+      error: error.message,
+    });
+    }
+  };
+
+
+  exports.decreaseVote = async (req, res) => {
+    try {
+      const { postId } = req.params;
+      const { userId } = req.body;
+      console.log('Removing vote:', postId, userId);
+  
+      // Find the post
+      const post = await Post.findById(postId);
+      if (!post) {
+        return res.status(404).json({ message: 'Post not found' });
+      }
+  
+      // Convert votes to strings for proper comparison
+      const userIdStr = userId.toString();
+      const hasVoted = post.votes.some(vote => vote.toString() === userIdStr);
+  
+      if (!hasVoted) {
+        console.log("User hasn't voted yet");
+        return res.status(400).json({ message: 'You have not voted for this post yet' });
+      }
+  
+      // Use MongoDB's $pull operator to remove the vote
+      const updatedPost = await Post.findByIdAndUpdate(
+        postId,
+        { $pull: { votes: userId } },
+        { new: true } // Return the updated document
+      );
+  
+      if (!updatedPost) {
+        return res.status(404).json({ message: 'Post not found during update' });
+      }
+  
+      console.log('Updated votes:', updatedPost.votes);
+  
+      return res.status(200).json({
+        message: 'Vote removed successfully',
+        updatedVotes: updatedPost.votes
+      });
+    } catch (error) {
+      console.error('Error removing vote:', error);
+      return res.status(500).json({
+        message: 'Error removing vote',
+        error: error.message,
+      });
+    }
+  };
