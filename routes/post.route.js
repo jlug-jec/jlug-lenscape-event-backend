@@ -1,5 +1,5 @@
 const express = require('express');
-const { createPostController,editPostController,getPosts, getAllPosts,increaseVote } = require('../controllers/post.controller');
+const { createPostController,editPostController,getPosts, getAllPosts,increaseVote,decreaseVote } = require('../controllers/post.controller');
 const { authenticateJWT } = require('../middleware/auth');
 const checkDrivelink = require('../config/checkDrive'); 
 const router = express.Router();
@@ -25,5 +25,6 @@ router.post('/isPublicDrive', async (req, res) => {
 });
 router.get('/all', getAllPosts);
 router.post("/vote/:postId",increaseVote)
+router.post("/downvote/:postId",decreaseVote)
 
 module.exports = router;
