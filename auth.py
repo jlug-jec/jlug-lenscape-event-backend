@@ -105,11 +105,37 @@ def require_auth(f):
 def admin_only(f):
     """
     Decorator to restrict route to administrators only.
+    Accepts either a Clerk JWT (with admin email) OR a Lenscape admin session JWT.
     """
     @wraps(f)
-    @require_auth
     def decorated(*args, **kwargs):
-        if not getattr(g, "is_admin", False):
-            return jsonify({"error": "Administrator privileges required"}), 403
-        return f(*args, **kwargs)
+        import jwt as pyjwt, os
+        from database import admins_col
+
+        auth_header = request.headers.get("Authorization", "")
+        parts = auth_header.split()
+        token = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else None
+
+        # Try Lenscape admin JWT first
+        ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "change-me-in-production")
+        if token:
+            try:
+                payload = pyjwt.decode(token, ADMIN_JWT_SECRET, algorithms=["HS256"])
+                admin = admins_col.find_one({"email": payload.get("email")})
+                if admin:
+                    g.user_id = payload.get("sub")
+                    g.user_email = payload.get("email")
+                    g.is_admin = True
+                    return f(*args, **kwargs)
+            except (pyjwt.InvalidTokenError, Exception):
+                pass  # Fall through to Clerk check
+
+        # Fall back to Clerk-based admin check
+        @require_auth
+        def inner(*args, **kwargs):
+            if not getattr(g, "is_admin", False):
+                return jsonify({"error": "Administrator privileges required"}), 403
+            return f(*args, **kwargs)
+
+        return inner(*args, **kwargs)
     return decorated

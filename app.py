@@ -1,16 +1,21 @@
 import os
 import time
-from datetime import datetime
+import random
+import jwt as pyjwt
+import bcrypt
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_mail import Mail, Message
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import cloudinary
 import cloudinary.uploader
 from dotenv import load_dotenv
 
 # Import database collections and setup
-from database import init_db, users_col, artworks_col, categories_col, banned_users_col
+from database import init_db, users_col, artworks_col, categories_col, banned_users_col, admins_col
 from auth import require_auth, admin_only
 
 # Load environment variables
@@ -20,6 +25,23 @@ app = Flask(__name__)
 
 # Enable CORS for frontend integration
 CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# Flask-Mail configuration (Gmail SMTP)
+app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER", "smtp.gmail.com")
+app.config["MAIL_PORT"] = int(os.getenv("MAIL_PORT", 587))
+app.config["MAIL_USE_TLS"] = True
+app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME")
+app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD")
+app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER", os.getenv("MAIL_USERNAME"))
+mail = Mail(app)
+
+# OTP signing secret — used to create tamper-proof signed OTP tokens
+OTP_SECRET = os.getenv("OTP_SECRET", "otp-secret-change-me")
+otp_serializer = URLSafeTimedSerializer(OTP_SECRET)
+
+# User session JWT
+USER_JWT_SECRET = os.getenv("USER_JWT_SECRET", "user-jwt-secret-change-me")
+USER_SESSION_HOURS = 24 * 7  # 7 days
 
 # Rate Limiter setup using local in-memory storage to prevent crash spikes
 limiter = Limiter(
@@ -499,6 +521,253 @@ def unban_user(user_id):
     banned_users_col.delete_one({"userId": user_id})
     users_col.update_one({"_id": user_id}, {"$set": {"isBanned": False}})
     return jsonify({"success": True}), 200
+
+# ── User OTP Auth Routes ────────────────────────────────────────────────────────
+
+@app.route("/api/auth/send-otp", methods=["POST"])
+@limiter.limit("3 per minute")
+def send_otp():
+    """
+    Step 1: User submits email → generate 6-digit OTP, sign it, send via Gmail.
+    """
+    data = request.get_json() or {}
+    email = data.get("email", "").strip().lower()
+
+    if not email or "@" not in email:
+        return jsonify({"error": "Valid email is required"}), 400
+
+    # Generate 6-digit OTP
+    otp = str(random.randint(100000, 999999))
+
+    # Sign OTP + email into a token (expires in 10 minutes)
+    token = otp_serializer.dumps({"email": email, "otp": otp})
+
+    # Send email
+    try:
+        msg = Message(
+            subject="Lenscape — Your Verification Code",
+            recipients=[email],
+            html=f"""
+            <div style="font-family:monospace;background:#0c0c0c;color:#e8dcc8;padding:32px;max-width:480px;margin:auto;border:1px solid rgba(201,168,76,0.3)">
+              <p style="font-size:10px;color:#C9A84C;letter-spacing:0.3em;text-transform:uppercase;margin-bottom:8px">Lenscape · Digital Exhibition</p>
+              <h2 style="font-size:28px;font-weight:300;margin:0 0 24px">Verification Code</h2>
+              <div style="font-size:36px;font-weight:bold;letter-spacing:0.2em;color:#C9A84C;border:1px solid rgba(201,168,76,0.3);padding:16px;text-align:center;margin-bottom:24px">{otp}</div>
+              <p style="font-size:11px;color:#666;line-height:1.6">
+                Enter this code on the Lenscape auth page. It expires in <strong style="color:#e8dcc8">10 minutes</strong>.<br>
+                If you didn't request this, ignore this email.
+              </p>
+            </div>
+            """
+        )
+        mail.send(msg)
+    except Exception as e:
+        app.logger.error(f"Mail send failed: {e}")
+        return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
+
+    # Return signed token to frontend (frontend stores it, sends back with OTP for verification)
+    return jsonify({"token": token, "message": "OTP sent"}), 200
+
+
+@app.route("/api/auth/verify-otp", methods=["POST"])
+@limiter.limit("5 per minute")
+def verify_otp():
+    """
+    Step 2: User submits email + OTP + signed token → verify → issue user session JWT.
+    For new users also accepts name/college/branch/year/bio to create their profile.
+    """
+    data = request.get_json() or {}
+    email = data.get("email", "").strip().lower()
+    otp_input = data.get("otp", "").strip()
+    token = data.get("token", "")
+
+    if not email or not otp_input or not token:
+        return jsonify({"error": "email, otp, and token are required"}), 400
+
+    # Verify signed token (max age = 600 seconds = 10 minutes)
+    try:
+        payload = otp_serializer.loads(token, max_age=600)
+    except SignatureExpired:
+        return jsonify({"error": "OTP has expired. Please request a new one."}), 400
+    except BadSignature:
+        return jsonify({"error": "Invalid token. Please request a new OTP."}), 400
+
+    if payload.get("email") != email:
+        return jsonify({"error": "Email mismatch."}), 400
+
+    if payload.get("otp") != otp_input:
+        return jsonify({"error": "Incorrect OTP. Please try again."}), 400
+
+    # OTP verified — find or create user
+    existing = users_col.find_one({"email": email})
+
+    if existing:
+        user_id = str(existing["_id"])
+        user_name = existing.get("name", "")
+        is_new = False
+    else:
+        # New user — require profile fields
+        name = data.get("name", "").strip()
+        college = data.get("college", "").strip()
+        branch = data.get("branch", "").strip()
+        year = data.get("year", "1st Year").strip()
+        bio = data.get("bio", "").strip()
+        avatar = data.get("avatar", f"https://api.dicebear.com/7.x/bottts/svg?seed={email}")
+
+        if not name or not college or not branch:
+            # Tell frontend this is a new user who needs to complete profile
+            return jsonify({"verified": True, "newUser": True}), 200
+
+        new_user = {
+            "name": name,
+            "email": email,
+            "college": college,
+            "branch": branch,
+            "year": year,
+            "bio": bio,
+            "avatar": avatar,
+            "votedCategories": [],
+            "commentedArtworks": [],
+            "achievements": [],
+            "joinedDate": datetime.utcnow(),
+            "isBanned": False,
+            "isAdmin": False,
+        }
+        result = users_col.insert_one(new_user)
+        user_id = str(result.inserted_id)
+        user_name = name
+        is_new = True
+
+    # Check ban
+    if banned_users_col.find_one({"userId": user_id}):
+        return jsonify({"error": "This account is banned due to a code of conduct violation."}), 403
+
+    # Issue user session JWT
+    jwt_payload = {
+        "sub": user_id,
+        "email": email,
+        "name": user_name,
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(hours=USER_SESSION_HOURS),
+    }
+    session_token = pyjwt.encode(jwt_payload, USER_JWT_SECRET, algorithm="HS256")
+
+    return jsonify({
+        "verified": True,
+        "newUser": is_new,
+        "token": session_token,
+        "userId": user_id,
+        "name": user_name,
+        "email": email,
+    }), 200
+
+
+@app.route("/api/auth/verify-token", methods=["GET"])
+def verify_user_token():
+    """Lightweight check — used by frontend to validate stored session."""
+    auth_header = request.headers.get("Authorization", "")
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return jsonify({"valid": False}), 401
+    try:
+        payload = pyjwt.decode(parts[1], USER_JWT_SECRET, algorithms=["HS256"])
+        user = users_col.find_one({"_id": payload["sub"]}) or users_col.find_one({"email": payload["email"]})
+        if not user:
+            return jsonify({"valid": False}), 401
+        if banned_users_col.find_one({"userId": payload["sub"]}):
+            return jsonify({"valid": False, "banned": True}), 403
+        return jsonify({"valid": True, "userId": payload["sub"], "name": payload.get("name"), "email": payload.get("email")}), 200
+    except pyjwt.ExpiredSignatureError:
+        return jsonify({"valid": False, "error": "Session expired"}), 401
+    except pyjwt.InvalidTokenError:
+        return jsonify({"valid": False}), 401
+
+
+# ── Admin Auth Routes ────────────────────────────────────────────────────────────
+
+ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "change-me-in-production")
+ADMIN_SESSION_HOURS = 12
+
+@app.route("/api/admin/login", methods=["POST"])
+@limiter.limit("5 per minute")
+def admin_login():
+    data = request.get_json() or {}
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
+    secret_key = data.get("secretKey", "")
+
+    if not email or not password or not secret_key:
+        return jsonify({"error": "Email, password and secret key are required"}), 400
+
+    admin = admins_col.find_one({"email": email})
+    if not admin:
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    # Verify password hash
+    if not bcrypt.checkpw(password.encode(), admin["passwordHash"].encode()):
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    # Verify secret key hash
+    if not bcrypt.checkpw(secret_key.encode(), admin["secretKeyHash"].encode()):
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    # Issue JWT session token
+    payload = {
+        "sub": str(admin["_id"]),
+        "email": admin["email"],
+        "name": admin["name"],
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(hours=ADMIN_SESSION_HOURS)
+    }
+    token = pyjwt.encode(payload, ADMIN_JWT_SECRET, algorithm="HS256")
+    return jsonify({"token": token, "name": admin["name"]}), 200
+
+
+@app.route("/api/admin/verify", methods=["GET"])
+def admin_verify():
+    """Lightweight token check used by frontend on page load."""
+    auth_header = request.headers.get("Authorization", "")
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return jsonify({"valid": False}), 401
+    try:
+        payload = pyjwt.decode(parts[1], ADMIN_JWT_SECRET, algorithms=["HS256"])
+        return jsonify({"valid": True, "name": payload.get("name")}), 200
+    except pyjwt.ExpiredSignatureError:
+        return jsonify({"valid": False, "error": "Token expired"}), 401
+    except pyjwt.InvalidTokenError:
+        return jsonify({"valid": False, "error": "Invalid token"}), 401
+
+
+@app.route("/api/admin/create", methods=["POST"])
+def create_admin():
+    """
+    One-time seeding endpoint — only works when zero admins exist in the DB.
+    Remove or gate this in production after first use.
+    """
+    if admins_col.count_documents({}) > 0:
+        return jsonify({"error": "Admin already exists. Use the login endpoint."}), 403
+
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
+    secret_key = data.get("secretKey", "")
+
+    if not name or not email or not password or not secret_key:
+        return jsonify({"error": "name, email, password and secretKey are all required"}), 400
+
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    secret_key_hash = bcrypt.hashpw(secret_key.encode(), bcrypt.gensalt()).decode()
+
+    admins_col.insert_one({
+        "name": name,
+        "email": email,
+        "passwordHash": password_hash,
+        "secretKeyHash": secret_key_hash,
+        "createdAt": datetime.utcnow()
+    })
+    return jsonify({"success": True, "message": "Admin account created."}), 201
+
 
 # 6. Global Error Handlers
 @app.errorhandler(Exception)
