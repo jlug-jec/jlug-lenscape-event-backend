@@ -15,7 +15,7 @@ import cloudinary.uploader
 from dotenv import load_dotenv
 
 # Import database collections and setup
-from database import init_db, users_col, artworks_col, categories_col, banned_users_col, admins_col
+from database import init_db, users_col, artworks_col, categories_col, banned_users_col, admins_col, fb_auth
 from auth import require_auth, admin_only
 
 # Load environment variables
@@ -67,7 +67,7 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
 else:
     print("Warning: Cloudinary credentials missing. File uploads will fallback to text URLs.")
 
-# Initialize MongoDB index configurations
+# Initialize Firestore + seed default categories
 init_db()
 
 # --- Helper Functions ---
@@ -371,13 +371,7 @@ def submit_artwork():
 @require_auth
 @limiter.limit("10 per minute")
 def vote_artwork(artwork_id):
-    from bson import ObjectId
-    try:
-        art_oid = ObjectId(artwork_id)
-    except:
-        return jsonify({"error": "Invalid artwork ID format"}), 400
-
-    artwork = artworks_col.find_one({"_id": art_oid, "status": "approved"})
+    artwork = artworks_col.find_one({"_id": artwork_id, "status": "approved"})
     if not artwork:
         return jsonify({"error": "Approved artwork not found"}), 404
 
@@ -392,7 +386,7 @@ def vote_artwork(artwork_id):
 
     # Register Vote
     artworks_col.update_one(
-        {"_id": art_oid},
+        {"_id": artwork_id},
         {
             "$inc": {"votes": 1},
             "$push": {"voters": g.user_id}
@@ -412,13 +406,7 @@ def vote_artwork(artwork_id):
 @require_auth
 @limiter.limit("5 per minute")
 def comment_artwork(artwork_id):
-    from bson import ObjectId
-    try:
-        art_oid = ObjectId(artwork_id)
-    except:
-        return jsonify({"error": "Invalid artwork ID format"}), 400
-
-    artwork = artworks_col.find_one({"_id": art_oid, "status": "approved"})
+    artwork = artworks_col.find_one({"_id": artwork_id, "status": "approved"})
     if not artwork:
         return jsonify({"error": "Approved artwork not found"}), 404
 
@@ -447,7 +435,7 @@ def comment_artwork(artwork_id):
 
     # Add comment to artwork
     artworks_col.update_one(
-        {"_id": art_oid},
+        {"_id": artwork_id},
         {"$push": {"comments": comment_doc}}
     )
 
@@ -460,18 +448,12 @@ def comment_artwork(artwork_id):
 @app.route("/api/artworks/<artwork_id>/approve", methods=["POST"])
 @admin_only
 def approve_artwork(artwork_id):
-    from bson import ObjectId
-    try:
-        art_oid = ObjectId(artwork_id)
-    except:
-        return jsonify({"error": "Invalid artwork ID"}), 400
-
-    result = artworks_col.update_one({"_id": art_oid}, {"$set": {"status": "approved"}})
+    result = artworks_col.update_one({"_id": artwork_id}, {"$set": {"status": "approved"}})
     if result.matched_count == 0:
         return jsonify({"error": "Artwork not found"}), 404
 
     # Trigger achievement checklist updates for the artist of the approved artwork
-    artwork = artworks_col.find_one({"_id": art_oid})
+    artwork = artworks_col.find_one({"_id": artwork_id})
     if artwork and "artist" in artwork:
         check_and_unlock_achievements(artwork["artist"]["id"])
 
@@ -480,13 +462,7 @@ def approve_artwork(artwork_id):
 @app.route("/api/artworks/<artwork_id>/reject", methods=["POST"])
 @admin_only
 def reject_artwork(artwork_id):
-    from bson import ObjectId
-    try:
-        art_oid = ObjectId(artwork_id)
-    except:
-        return jsonify({"error": "Invalid artwork ID"}), 400
-
-    result = artworks_col.update_one({"_id": art_oid}, {"$set": {"status": "rejected"}})
+    result = artworks_col.update_one({"_id": artwork_id}, {"$set": {"status": "rejected"}})
     if result.matched_count == 0:
         return jsonify({"error": "Artwork not found"}), 404
     return jsonify({"success": True}), 200
@@ -522,49 +498,132 @@ def unban_user(user_id):
     users_col.update_one({"_id": user_id}, {"$set": {"isBanned": False}})
     return jsonify({"success": True}), 200
 
-# ── User OTP Auth Routes ────────────────────────────────────────────────────────
+# ── User Auth Helpers ────────────────────────────────────────────────────────
+
+def issue_user_jwt(user_id, email, name, profile_complete):
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "name": name,
+        "profileComplete": profile_complete,
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(hours=USER_SESSION_HOURS),
+    }
+    return pyjwt.encode(payload, USER_JWT_SECRET, algorithm="HS256")
+
+
+def send_otp_email(email, otp):
+    msg = Message(
+        subject="Lenscape — Your Verification Code",
+        recipients=[email],
+        html=f"""
+        <div style="font-family:monospace;background:#0c0c0c;color:#e8dcc8;padding:32px;max-width:480px;margin:auto;border:1px solid rgba(201,168,76,0.3)">
+          <p style="font-size:10px;color:#C9A84C;letter-spacing:0.3em;text-transform:uppercase;margin-bottom:8px">Lenscape · Digital Exhibition</p>
+          <h2 style="font-size:28px;font-weight:300;margin:0 0 24px">Verification Code</h2>
+          <div style="font-size:36px;font-weight:bold;letter-spacing:0.2em;color:#C9A84C;border:1px solid rgba(201,168,76,0.3);padding:16px;text-align:center;margin-bottom:24px">{otp}</div>
+          <p style="font-size:11px;color:#666;line-height:1.6">
+            Enter this code on the Lenscape sign-in page. It expires in <strong style="color:#e8dcc8">10 minutes</strong>.<br>
+            If you didn't request this, ignore this email.
+          </p>
+        </div>
+        """
+    )
+    mail.send(msg)
+
+
+# ── User Auth Routes ─────────────────────────────────────────────────────────
+
+@app.route("/api/auth/google", methods=["POST"])
+@limiter.limit("20 per minute")
+def auth_google():
+    """
+    Google OAuth: frontend signs in with Firebase, sends the Firebase ID token.
+    We verify it, then find/create the user and issue our session JWT.
+    """
+    data = request.get_json() or {}
+    id_token = data.get("idToken", "")
+    if not id_token:
+        return jsonify({"error": "Missing Google ID token"}), 400
+
+    try:
+        decoded = fb_auth.verify_id_token(id_token)
+    except Exception as e:
+        return jsonify({"error": f"Invalid Google token: {str(e)}"}), 401
+
+    email = (decoded.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "Google account has no email"}), 400
+    if not decoded.get("email_verified", False):
+        return jsonify({"error": "Google email is not verified"}), 403
+
+    google_name = decoded.get("name", "")
+    google_avatar = decoded.get("picture", "")
+
+    existing = users_col.find_one({"email": email})
+    if existing:
+        user_id = str(existing["_id"])
+        if banned_users_col.find_one({"userId": user_id}):
+            return jsonify({"error": "This account is banned due to a code of conduct violation."}), 403
+        profile_complete = bool(existing.get("profileComplete", True))
+        token = issue_user_jwt(user_id, email, existing.get("name", ""), profile_complete)
+        return jsonify({
+            "token": token, "userId": user_id, "name": existing.get("name", ""),
+            "email": email, "profileComplete": profile_complete,
+        }), 200
+
+    # New user — create a stub, mark profile incomplete
+    stub = {
+        "name": google_name,
+        "email": email,
+        "college": "", "branch": "", "year": "", "bio": "",
+        "avatar": google_avatar or f"https://api.dicebear.com/7.x/bottts/svg?seed={email}",
+        "authProvider": "google",
+        "votedCategories": [], "commentedArtworks": [], "achievements": [],
+        "joinedDate": datetime.utcnow(), "isBanned": False, "isAdmin": False,
+        "profileComplete": False,
+    }
+    result = users_col.insert_one(stub)
+    user_id = str(result.inserted_id)
+    token = issue_user_jwt(user_id, email, google_name, False)
+    return jsonify({
+        "token": token, "userId": user_id, "name": google_name,
+        "email": email, "profileComplete": False,
+    }), 200
+
 
 @app.route("/api/auth/send-otp", methods=["POST"])
 @limiter.limit("3 per minute")
 def send_otp():
     """
-    Step 1: User submits email → generate 6-digit OTP, sign it, send via Gmail.
+    Email/Password signup step 1 — verify the email is real by sending an OTP.
+    Requires email + password. Password is hashed and stashed in the signed token
+    so we only create the account after OTP confirmation.
     """
     data = request.get_json() or {}
     email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
 
     if not email or "@" not in email:
-        return jsonify({"error": "Valid email is required"}), 400
+        return jsonify({"error": "A valid email is required"}), 400
+    if not password or len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
 
-    # Generate 6-digit OTP
+    existing = users_col.find_one({"email": email})
+    if existing and existing.get("passwordHash"):
+        return jsonify({"error": "An account with this email already exists. Please log in."}), 400
+
     otp = str(random.randint(100000, 999999))
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-    # Sign OTP + email into a token (expires in 10 minutes)
-    token = otp_serializer.dumps({"email": email, "otp": otp})
+    # Sign email + otp + password hash into a short-lived token
+    token = otp_serializer.dumps({"email": email, "otp": otp, "ph": password_hash})
 
-    # Send email
     try:
-        msg = Message(
-            subject="Lenscape — Your Verification Code",
-            recipients=[email],
-            html=f"""
-            <div style="font-family:monospace;background:#0c0c0c;color:#e8dcc8;padding:32px;max-width:480px;margin:auto;border:1px solid rgba(201,168,76,0.3)">
-              <p style="font-size:10px;color:#C9A84C;letter-spacing:0.3em;text-transform:uppercase;margin-bottom:8px">Lenscape · Digital Exhibition</p>
-              <h2 style="font-size:28px;font-weight:300;margin:0 0 24px">Verification Code</h2>
-              <div style="font-size:36px;font-weight:bold;letter-spacing:0.2em;color:#C9A84C;border:1px solid rgba(201,168,76,0.3);padding:16px;text-align:center;margin-bottom:24px">{otp}</div>
-              <p style="font-size:11px;color:#666;line-height:1.6">
-                Enter this code on the Lenscape auth page. It expires in <strong style="color:#e8dcc8">10 minutes</strong>.<br>
-                If you didn't request this, ignore this email.
-              </p>
-            </div>
-            """
-        )
-        mail.send(msg)
+        send_otp_email(email, otp)
     except Exception as e:
         app.logger.error(f"Mail send failed: {e}")
-        return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
+        return jsonify({"error": f"Failed to send verification email: {str(e)}"}), 500
 
-    # Return signed token to frontend (frontend stores it, sends back with OTP for verification)
     return jsonify({"token": token, "message": "OTP sent"}), 200
 
 
@@ -572,8 +631,8 @@ def send_otp():
 @limiter.limit("5 per minute")
 def verify_otp():
     """
-    Step 2: User submits email + OTP + signed token → verify → issue user session JWT.
-    For new users also accepts name/college/branch/year/bio to create their profile.
+    Email/Password signup step 2 — verify OTP, create the account, issue JWT.
+    New accounts always start with profileComplete = False.
     """
     data = request.get_json() or {}
     email = data.get("email", "").strip().lower()
@@ -583,7 +642,6 @@ def verify_otp():
     if not email or not otp_input or not token:
         return jsonify({"error": "email, otp, and token are required"}), 400
 
-    # Verify signed token (max age = 600 seconds = 10 minutes)
     try:
         payload = otp_serializer.loads(token, max_age=600)
     except SignatureExpired:
@@ -593,89 +651,118 @@ def verify_otp():
 
     if payload.get("email") != email:
         return jsonify({"error": "Email mismatch."}), 400
-
     if payload.get("otp") != otp_input:
         return jsonify({"error": "Incorrect OTP. Please try again."}), 400
 
-    # OTP verified — find or create user
     existing = users_col.find_one({"email": email})
+    if existing and existing.get("passwordHash"):
+        return jsonify({"error": "Account already exists. Please log in."}), 400
 
-    if existing:
-        user_id = str(existing["_id"])
-        user_name = existing.get("name", "")
-        is_new = False
-    else:
-        # New user — require profile fields
-        name = data.get("name", "").strip()
-        college = data.get("college", "").strip()
-        branch = data.get("branch", "").strip()
-        year = data.get("year", "1st Year").strip()
-        bio = data.get("bio", "").strip()
-        avatar = data.get("avatar", f"https://api.dicebear.com/7.x/bottts/svg?seed={email}")
+    new_user = {
+        "name": "",
+        "email": email,
+        "passwordHash": payload.get("ph"),
+        "authProvider": "password",
+        "college": "", "branch": "", "year": "", "bio": "",
+        "avatar": f"https://api.dicebear.com/7.x/bottts/svg?seed={email}",
+        "votedCategories": [], "commentedArtworks": [], "achievements": [],
+        "joinedDate": datetime.utcnow(), "isBanned": False, "isAdmin": False,
+        "profileComplete": False,
+    }
+    result = users_col.insert_one(new_user)
+    user_id = str(result.inserted_id)
+    token_jwt = issue_user_jwt(user_id, email, "", False)
+    return jsonify({
+        "verified": True, "token": token_jwt, "userId": user_id,
+        "email": email, "name": "", "profileComplete": False,
+    }), 200
 
-        if not name or not college or not branch:
-            # Tell frontend this is a new user who needs to complete profile
-            return jsonify({"verified": True, "newUser": True}), 200
 
-        new_user = {
-            "name": name,
-            "email": email,
-            "college": college,
-            "branch": branch,
-            "year": year,
-            "bio": bio,
-            "avatar": avatar,
-            "votedCategories": [],
-            "commentedArtworks": [],
-            "achievements": [],
-            "joinedDate": datetime.utcnow(),
-            "isBanned": False,
-            "isAdmin": False,
-        }
-        result = users_col.insert_one(new_user)
-        user_id = str(result.inserted_id)
-        user_name = name
-        is_new = True
+@app.route("/api/auth/login", methods=["POST"])
+@limiter.limit("10 per minute")
+def login_password():
+    """Email/Password login for existing accounts."""
+    data = request.get_json() or {}
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
 
-    # Check ban
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    user = users_col.find_one({"email": email})
+    if not user or not user.get("passwordHash"):
+        return jsonify({"error": "Invalid credentials"}), 401
+    if not bcrypt.checkpw(password.encode(), user["passwordHash"].encode()):
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    user_id = str(user["_id"])
     if banned_users_col.find_one({"userId": user_id}):
         return jsonify({"error": "This account is banned due to a code of conduct violation."}), 403
 
-    # Issue user session JWT
-    jwt_payload = {
-        "sub": user_id,
-        "email": email,
-        "name": user_name,
-        "iat": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(hours=USER_SESSION_HOURS),
-    }
-    session_token = pyjwt.encode(jwt_payload, USER_JWT_SECRET, algorithm="HS256")
-
+    profile_complete = bool(user.get("profileComplete", True))
+    token = issue_user_jwt(user_id, email, user.get("name", ""), profile_complete)
     return jsonify({
-        "verified": True,
-        "newUser": is_new,
-        "token": session_token,
-        "userId": user_id,
-        "name": user_name,
-        "email": email,
+        "token": token, "userId": user_id, "name": user.get("name", ""),
+        "email": email, "profileComplete": profile_complete,
+    }), 200
+
+
+@app.route("/api/auth/complete-profile", methods=["POST"])
+@require_auth
+def complete_profile():
+    """
+    After Google or email signup, the user lands here to fill in
+    name/college/branch/year/bio. Marks profileComplete = True and re-issues JWT.
+    """
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    college = data.get("college", "").strip()
+    branch = data.get("branch", "").strip()
+    year = data.get("year", "1st Year").strip()
+    bio = data.get("bio", "").strip()
+    avatar = data.get("avatar", "")
+
+    if not name or not college or not branch:
+        return jsonify({"error": "Name, college and branch are required"}), 400
+
+    existing = users_col.find_one({"_id": g.user_id})
+    if not existing:
+        return jsonify({"error": "User not found"}), 404
+
+    update = {
+        "name": name, "college": college, "branch": branch,
+        "year": year, "bio": bio, "profileComplete": True,
+    }
+    if avatar:
+        update["avatar"] = avatar
+
+    users_col.update_one({"_id": g.user_id}, {"$set": update})
+
+    token = issue_user_jwt(g.user_id, g.user_email, name, True)
+    user = users_col.find_one({"_id": g.user_id})
+    return jsonify({
+        "token": token, "user": serialize_doc(user), "profileComplete": True,
     }), 200
 
 
 @app.route("/api/auth/verify-token", methods=["GET"])
 def verify_user_token():
-    """Lightweight check — used by frontend to validate stored session."""
+    """Validate a stored user session."""
     auth_header = request.headers.get("Authorization", "")
     parts = auth_header.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
         return jsonify({"valid": False}), 401
     try:
         payload = pyjwt.decode(parts[1], USER_JWT_SECRET, algorithms=["HS256"])
-        user = users_col.find_one({"_id": payload["sub"]}) or users_col.find_one({"email": payload["email"]})
+        user = users_col.find_one({"_id": payload["sub"]})
         if not user:
             return jsonify({"valid": False}), 401
         if banned_users_col.find_one({"userId": payload["sub"]}):
             return jsonify({"valid": False, "banned": True}), 403
-        return jsonify({"valid": True, "userId": payload["sub"], "name": payload.get("name"), "email": payload.get("email")}), 200
+        return jsonify({
+            "valid": True, "userId": payload["sub"], "name": payload.get("name"),
+            "email": payload.get("email"), "profileComplete": bool(user.get("profileComplete", True)),
+        }), 200
     except pyjwt.ExpiredSignatureError:
         return jsonify({"valid": False, "error": "Session expired"}), 401
     except pyjwt.InvalidTokenError:
@@ -686,11 +773,22 @@ def verify_user_token():
 
 ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "change-me-in-production")
 ADMIN_SESSION_HOURS = 12
+# Master secret key — anyone who knows it can register/login as an admin
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "lenscape-master-key")
+
 
 @app.route("/api/admin/login", methods=["POST"])
 @limiter.limit("5 per minute")
 def admin_login():
+    """
+    Admin login/registration in one step.
+    Takes name, email, password, secretKey.
+    - secretKey must match the master ADMIN_SECRET_KEY (no email allow-list).
+    - If the email is new, an admin account is created on the fly.
+    - If it exists, the password is verified.
+    """
     data = request.get_json() or {}
+    name = data.get("name", "").strip()
     email = data.get("email", "").strip().lower()
     password = data.get("password", "")
     secret_key = data.get("secretKey", "")
@@ -698,28 +796,42 @@ def admin_login():
     if not email or not password or not secret_key:
         return jsonify({"error": "Email, password and secret key are required"}), 400
 
+    # Master secret key gate — open to any email that knows the key
+    if secret_key != ADMIN_SECRET_KEY:
+        return jsonify({"error": "Invalid secret key"}), 401
+
     admin = admins_col.find_one({"email": email})
-    if not admin:
-        return jsonify({"error": "Invalid credentials"}), 401
 
-    # Verify password hash
-    if not bcrypt.checkpw(password.encode(), admin["passwordHash"].encode()):
-        return jsonify({"error": "Invalid credentials"}), 401
+    if admin:
+        # Existing admin — verify password
+        if not bcrypt.checkpw(password.encode(), admin["passwordHash"].encode()):
+            return jsonify({"error": "Invalid credentials"}), 401
+        admin_id = str(admin["_id"])
+        admin_name = admin.get("name", name or "Curator")
+    else:
+        # New admin — create account (name required for first registration)
+        if not name:
+            return jsonify({"error": "Name is required to register a new admin"}), 400
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        new_admin = {
+            "name": name,
+            "email": email,
+            "passwordHash": password_hash,
+            "createdAt": datetime.utcnow(),
+        }
+        result = admins_col.insert_one(new_admin)
+        admin_id = str(result.inserted_id)
+        admin_name = name
 
-    # Verify secret key hash
-    if not bcrypt.checkpw(secret_key.encode(), admin["secretKeyHash"].encode()):
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    # Issue JWT session token
     payload = {
-        "sub": str(admin["_id"]),
-        "email": admin["email"],
-        "name": admin["name"],
+        "sub": admin_id,
+        "email": email,
+        "name": admin_name,
         "iat": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(hours=ADMIN_SESSION_HOURS)
+        "exp": datetime.utcnow() + timedelta(hours=ADMIN_SESSION_HOURS),
     }
     token = pyjwt.encode(payload, ADMIN_JWT_SECRET, algorithm="HS256")
-    return jsonify({"token": token, "name": admin["name"]}), 200
+    return jsonify({"token": token, "name": admin_name}), 200
 
 
 @app.route("/api/admin/verify", methods=["GET"])
@@ -731,42 +843,14 @@ def admin_verify():
         return jsonify({"valid": False}), 401
     try:
         payload = pyjwt.decode(parts[1], ADMIN_JWT_SECRET, algorithms=["HS256"])
+        admin = admins_col.find_one({"email": payload.get("email")})
+        if not admin:
+            return jsonify({"valid": False}), 401
         return jsonify({"valid": True, "name": payload.get("name")}), 200
     except pyjwt.ExpiredSignatureError:
         return jsonify({"valid": False, "error": "Token expired"}), 401
     except pyjwt.InvalidTokenError:
         return jsonify({"valid": False, "error": "Invalid token"}), 401
-
-
-@app.route("/api/admin/create", methods=["POST"])
-def create_admin():
-    """
-    One-time seeding endpoint — only works when zero admins exist in the DB.
-    Remove or gate this in production after first use.
-    """
-    if admins_col.count_documents({}) > 0:
-        return jsonify({"error": "Admin already exists. Use the login endpoint."}), 403
-
-    data = request.get_json() or {}
-    name = data.get("name", "").strip()
-    email = data.get("email", "").strip().lower()
-    password = data.get("password", "")
-    secret_key = data.get("secretKey", "")
-
-    if not name or not email or not password or not secret_key:
-        return jsonify({"error": "name, email, password and secretKey are all required"}), 400
-
-    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-    secret_key_hash = bcrypt.hashpw(secret_key.encode(), bcrypt.gensalt()).decode()
-
-    admins_col.insert_one({
-        "name": name,
-        "email": email,
-        "passwordHash": password_hash,
-        "secretKeyHash": secret_key_hash,
-        "createdAt": datetime.utcnow()
-    })
-    return jsonify({"success": True, "message": "Admin account created."}), 201
 
 
 # 6. Global Error Handlers
