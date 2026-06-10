@@ -12,6 +12,7 @@ event-scale dataset.
 """
 
 import os
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as firebase_auth
 from dotenv import load_dotenv
@@ -19,13 +20,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Initialize Firebase Admin ────────────────────────────────────────────────
+# Two ways to provide credentials:
+#  1. FIREBASE_SERVICE_ACCOUNT_JSON  → full JSON string (best for cloud hosts)
+#  2. FIREBASE_SERVICE_ACCOUNT       → path to the JSON file (best for local dev)
+SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
 SERVICE_ACCOUNT_PATH = os.getenv(
     "FIREBASE_SERVICE_ACCOUNT",
     "lenscape-25955-firebase-adminsdk-fbsvc-2e02180c2c.json",
 )
 
 if not firebase_admin._apps:
-    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+    if SERVICE_ACCOUNT_JSON:
+        cred = credentials.Certificate(json.loads(SERVICE_ACCOUNT_JSON))
+    else:
+        cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
     firebase_admin.initialize_app(cred)
 
 _db = firestore.client()

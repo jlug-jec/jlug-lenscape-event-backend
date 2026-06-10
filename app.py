@@ -23,8 +23,10 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Enable CORS for frontend integration
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# CORS — configurable allowed origins (comma-separated), defaults to all in dev
+_cors_origins = os.getenv("CORS_ORIGINS", "*")
+_origins = [o.strip() for o in _cors_origins.split(",")] if _cors_origins != "*" else "*"
+CORS(app, resources={r"/api/*": {"origins": _origins}})
 
 # Flask-Mail configuration (Gmail SMTP)
 app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER", "smtp.gmail.com")
