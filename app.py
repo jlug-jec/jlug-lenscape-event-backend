@@ -873,11 +873,25 @@ def admin_verify():
 
 
 # 6. Global Error Handlers
+@app.route("/", methods=["GET", "HEAD"])
+def root_health():
+    """Simple root endpoint for Render's automated health checks."""
+    return jsonify({"status": "healthy", "service": "lenscape-backend"}), 200
+
+from werkzeug.exceptions import HTTPException
+
 @app.errorhandler(Exception)
 def handle_exception(e):
     """
     Global catch-all error handler returning structured JSON error details.
     """
+    # Pass through standard HTTP errors (like 404) correctly
+    if isinstance(e, HTTPException):
+        return jsonify({
+            "error": e.name,
+            "details": e.description
+        }), e.code
+
     app.logger.error(f"Unhandled server error: {str(e)}")
     return jsonify({
         "error": "An unexpected server error occurred",
