@@ -17,6 +17,14 @@ from dotenv import load_dotenv
 # Import database collections and setup
 from database import init_db, users_col, artworks_col, categories_col, banned_users_col, admins_col, fb_auth
 from auth import require_auth, admin_only
+from video_upload import (
+    allowed_video_file, 
+    allowed_image_file,
+    upload_video_to_cloudinary,
+    upload_cover_image_to_cloudinary,
+    delete_video_from_cloudinary,
+    delete_image_from_cloudinary
+)
 
 # Load environment variables
 load_dotenv()
@@ -102,12 +110,16 @@ def check_and_unlock_achievements(user_id):
     """
     Scans database to unlock creator badges dynamically based on user interactions.
     """
+    if not user_id:
+        return []
+
     user = users_col.find_one({"_id": user_id})
     if not user:
         return []
         
-    unlocked_ids = [ach["id"] for ach in user.get("achievements", [])]
-    new_achievements = list(user.get("achievements", []))
+    user_achievements = user.get("achievements") or []
+    unlocked_ids = [ach.get("id") for ach in user_achievements if isinstance(ach, dict)]
+    new_achievements = list(user_achievements)
     
     # 1. Creative Pioneer: First submission
     user_submissions_count = artworks_col.count_documents({"artist.id": user_id})
@@ -133,7 +145,7 @@ def check_and_unlock_achievements(user_id):
         })
         
     # 3. Grand Patron: Voted in at least 3 distinct categories
-    voted_cats = user.get("votedCategories", [])
+    voted_cats = user.get("votedCategories") or []
     if len(voted_cats) >= 3 and "ach3" not in unlocked_ids:
         new_achievements.append({
             "id": "ach3",
@@ -876,6 +888,133 @@ def admin_verify():
         return jsonify({"valid": False, "error": "Token expired"}), 401
     except pyjwt.InvalidTokenError:
         return jsonify({"valid": False, "error": "Invalid token"}), 401
+
+
+# 5. Video Artwork Upload Endpoint (for Cinematography & Motion Graphics)
+@app.route("/api/artworks/submit-video", methods=["POST"])
+@require_auth
+@limiter.limit("3 per minute")
+def submit_video_artwork():
+    """
+    Handle video artwork submission with cover image for cinematography and motion graphics
+    
+    Form Data:
+        - video: Video file (MP4/MKV, max 500MB)
+        - cover: Cover image (JPG/PNG/WebP, max 10MB)
+        - title: Artwork title
+        - description: Description
+        - category: Main category (cinematography/motion-graphics)
+        - subCategory: Subcategory (optional)
+    """
+    # Check if user is registered
+    user = users_col.find_one({"_id": g.user_id})
+    if not user:
+        return jsonify({"error": "Complete your profile signature first before submitting art"}), 400
+    
+    # Validate files are present
+    if 'video' not in request.files or 'cover' not in request.files:
+        return jsonify({"error": "Both video and cover image are required"}), 400
+    
+    video_file = request.files['video']
+    cover_file = request.files['cover']
+    
+    # Validate video file
+    if not video_file.filename or not allowed_video_file(video_file.filename):
+        return jsonify({"error": "Invalid video format. Please upload MP4 or MKV"}), 400
+    
+    # Validate cover image
+    if not cover_file.filename or not allowed_image_file(cover_file.filename):
+        return jsonify({"error": "Invalid image format. Please upload JPG, PNG or WebP"}), 400
+    
+    # Get form data
+    title = request.form.get('title', '').strip()
+    description = request.form.get('description', '').strip()
+    category = request.form.get('category', '').strip().lower()
+    sub_category = request.form.get('subCategory', '').strip()
+    orientation = request.form.get('orientation', 'widescreen').strip()
+    
+    # Validate required fields
+    if not title or not description or not category:
+        return jsonify({"error": "Title, description, and category are required"}), 400
+    
+    # Validate category is video-compatible
+    valid_video_categories = ['cinematography', 'motion-graphics']
+    if category not in valid_video_categories:
+        return jsonify({"error": f"Invalid category for video. Must be one of: {', '.join(valid_video_categories)}"}), 400
+    
+    # Generate unique artwork ID
+    artwork_id = "art_" + str(int(datetime.utcnow().timestamp() * 1000))
+    
+    try:
+        # Upload video to Cloudinary
+        print(f"Uploading video for artwork {artwork_id}...")
+        video_result = upload_video_to_cloudinary(video_file, artwork_id)
+        
+        if not video_result.get('success'):
+            error_msg = video_result.get('error', 'Unknown error')
+            return jsonify({"error": f"Video upload failed: {error_msg}"}), 500
+        
+        # Upload cover image to Cloudinary
+        print(f"Uploading cover image for artwork {artwork_id}...")
+        cover_result = upload_cover_image_to_cloudinary(cover_file, artwork_id)
+        
+        if not cover_result.get('success'):
+            # Rollback: Delete uploaded video
+            print(f"Cover upload failed. Rolling back video upload...")
+            delete_video_from_cloudinary(video_result.get('public_id'))
+            error_msg = cover_result.get('error', 'Unknown error')
+            return jsonify({"error": f"Cover image upload failed: {error_msg}"}), 500
+        
+        # Create artwork document
+        artwork_doc = {
+            "_id": artwork_id,
+            "title": title,
+            "description": description,
+            "category": category,
+            "subcategory": sub_category or None,
+            "orientation": orientation,
+            "imageUrl": cover_result['image_url'],
+            "thumbnailUrl": cover_result['thumbnail_url'],
+            "videoUrl": video_result['video_url'],
+            "videoDuration": video_result.get('duration'),
+            "videoFormat": video_result.get('format'),
+            "cloudinaryVideoId": video_result['public_id'],
+            "cloudinaryCoverId": cover_result['public_id'],
+            "artist": {
+                "id": user["_id"],
+                "name": user["name"],
+                "email": user["email"],
+                "college": user["college"],
+                "branch": user["branch"],
+                "year": user["year"],
+                "avatar": user["avatar"],
+                "bio": user["bio"],
+                "joinedDate": user["joinedDate"]
+            },
+            "votes": 0,
+            "voters": [],
+            "comments": [],
+            "createdAt": datetime.utcnow(),
+            "status": "approved" if g.is_admin else "pending"
+        }
+        
+        # Save to database
+        artworks_col.insert_one(artwork_doc)
+        
+        # Check achievements
+        check_and_unlock_achievements(g.user_id)
+        
+        print(f"Video artwork {artwork_id} submitted successfully!")
+        
+        return jsonify({
+            "success": True,
+            "artwork": serialize_doc(artwork_doc),
+            "message": "Video artwork submitted successfully"
+        }), 201
+        
+    except Exception as e:
+        app.logger.error(f"Video upload error: {str(e)}")
+        return jsonify({"error": f"Upload failed: {str(e)}"}), 500
 
 
 # 6. Global Error Handlers
