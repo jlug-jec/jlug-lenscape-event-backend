@@ -334,20 +334,22 @@ def submit_artwork():
     title = data.get("title", "").strip()
     description = data.get("description", "").strip()
     category = data.get("category", "").strip().lower()
+    subcategory = data.get("subcategory", "").strip()
+    orientation = data.get("orientation", "landscape").strip()
 
-    if not title or not description or not category or not image_url:
-        return jsonify({"error": "Title, description, category, and imageUrl are required"}), 400
-
-    # Validate category exists
-    if not categories_col.find_one({"name": category}):
-        return jsonify({"error": f"Category '{category}' does not exist"}), 400
+    if not title or not description or not category:
+        return jsonify({"error": "Title, description, and category are required"}), 400
+    if not image_url and not video_url:
+        return jsonify({"error": "A cover image or video URL is required"}), 400
 
     artwork_doc = {
         "title": title,
         "description": description,
         "category": category,
-        "imageUrl": image_url,
-        "thumbnailUrl": image_url,
+        "subcategory": subcategory or None,
+        "orientation": orientation,
+        "imageUrl": image_url or None,
+        "thumbnailUrl": image_url or None,
         "videoUrl": video_url or None,
         "artist": {
             "id": user["_id"],
