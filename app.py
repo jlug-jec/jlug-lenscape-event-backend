@@ -162,7 +162,7 @@ def check_and_unlock_achievements(user_id):
         new_achievements.append({
             "id": "ach4",
             "title": "Polymath",
-            "description": "Explored all available artwork domains",
+            "description": "Voted in all available artwork categories",
             "icon": "🔮",
             "unlockedAt": datetime.utcnow()
         })
@@ -405,15 +405,16 @@ def vote_artwork(artwork_id):
     if not artwork:
         return jsonify({"error": "Approved artwork not found"}), 404
 
-    # Enforce voting rules: 1 vote total per user (across all artworks)
+    # Enforce voting rules: 1 vote per category per user
     user = users_col.find_one({"_id": g.user_id})
     if not user:
         return jsonify({"error": "Please complete user signature first"}), 400
 
-    # Check if user has already voted on ANY artwork
-    voted_artworks = user.get("votedArtworks", [])
-    if len(voted_artworks) > 0:
-        return jsonify({"error": "You have already cast your vote. Only 1 vote allowed per user."}), 400
+    category = artwork["category"]
+    voted_categories = user.get("votedCategories", [])
+    
+    if category in voted_categories:
+        return jsonify({"error": f"You have already voted in the '{category.replace('-', ' ').title()}' category."}), 400
 
     # Register Vote
     artworks_col.update_one(
@@ -425,13 +426,13 @@ def vote_artwork(artwork_id):
     )
     users_col.update_one(
         {"_id": g.user_id},
-        {"$push": {"votedArtworks": artwork_id}}
+        {"$push": {"votedCategories": category}}
     )
 
     # Check and trigger achievements
     check_and_unlock_achievements(g.user_id)
 
-    return jsonify({"success": True, "artworkId": artwork_id}), 200
+    return jsonify({"success": True, "category": category}), 200
 
 @app.route("/api/artworks/<artwork_id>/comment", methods=["POST"])
 @require_auth
@@ -616,7 +617,7 @@ def auth_google():
         "college": "", "branch": "", "year": "", "bio": "",
         "avatar": google_avatar or f"https://api.dicebear.com/7.x/bottts/svg?seed={email}",
         "authProvider": "google",
-        "votedArtworks": [], "commentedArtworks": [], "achievements": [],
+        "votedCategories": [], "commentedArtworks": [], "achievements": [],
         "joinedDate": datetime.utcnow(), "isBanned": False, "isAdmin": False,
         "profileComplete": False,
     }
@@ -703,7 +704,7 @@ def verify_otp():
         "authProvider": "password",
         "college": "", "branch": "", "year": "", "bio": "",
         "avatar": f"https://api.dicebear.com/7.x/bottts/svg?seed={email}",
-        "votedArtworks": [], "commentedArtworks": [], "achievements": [],
+        "votedCategories": [], "commentedArtworks": [], "achievements": [],
         "joinedDate": datetime.utcnow(), "isBanned": False, "isAdmin": False,
         "profileComplete": False,
     }
