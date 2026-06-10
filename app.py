@@ -191,6 +191,14 @@ def delete_category(name):
     return jsonify({"success": True}), 200
 
 # 2. Users / Profile Endpoints
+@app.route("/api/users/submissions", methods=["GET"])
+@require_auth
+def get_user_submissions():
+    """Return all artworks submitted by the authenticated user (all statuses)."""
+    submissions = list(artworks_col.find({"artist.id": g.user_id}).sort("createdAt", -1))
+    return jsonify(serialize_doc(submissions)), 200
+
+
 @app.route("/api/users/profile", methods=["GET"])
 @require_auth
 def get_profile():
@@ -462,7 +470,14 @@ def approve_artwork(artwork_id):
 @app.route("/api/artworks/<artwork_id>/reject", methods=["POST"])
 @admin_only
 def reject_artwork(artwork_id):
-    result = artworks_col.update_one({"_id": artwork_id}, {"$set": {"status": "rejected"}})
+    data = request.get_json() or {}
+    reason = data.get("reason", "").strip()
+
+    update = {"status": "rejected"}
+    if reason:
+        update["rejectionReason"] = reason
+
+    result = artworks_col.update_one({"_id": artwork_id}, {"$set": update})
     if result.matched_count == 0:
         return jsonify({"error": "Artwork not found"}), 404
     return jsonify({"success": True}), 200
