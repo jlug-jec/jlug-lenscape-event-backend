@@ -292,6 +292,12 @@ def get_pending_artworks():
     artworks = list(artworks_col.find({"status": "pending"}).sort("createdAt", -1))
     return jsonify(serialize_doc(artworks)), 200
 
+@app.route("/api/artworks/rejected", methods=["GET"])
+@admin_only
+def get_rejected_artworks():
+    artworks = list(artworks_col.find({"status": "rejected"}).sort("createdAt", -1))
+    return jsonify(serialize_doc(artworks)), 200
+
 # 3. Cloudinary Signed Upload Endpoint
 @app.route("/api/cloudinary/signature", methods=["GET"])
 @require_auth
