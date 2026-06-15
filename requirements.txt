@@ -1,6 +1,5 @@
 Flask==3.0.2
 Flask-Cors==4.0.0
-Flask-Mail==0.9.1
 firebase-admin==6.5.0
 PyJWT[crypto]==2.8.0
 bcrypt==4.1.3

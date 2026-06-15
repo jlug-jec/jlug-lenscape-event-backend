@@ -3,12 +3,12 @@ import time
 import random
 import jwt as pyjwt
 import bcrypt
+import requests as http_requests
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_mail import Mail, Message
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import cloudinary
 import cloudinary.uploader
@@ -36,14 +36,10 @@ _cors_origins = os.getenv("CORS_ORIGINS", "*")
 _origins = [o.strip() for o in _cors_origins.split(",")] if _cors_origins != "*" else "*"
 CORS(app, resources={r"/api/*": {"origins": _origins}})
 
-# Flask-Mail configuration (Gmail SMTP)
-app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER", "smtp.gmail.com")
-app.config["MAIL_PORT"] = int(os.getenv("MAIL_PORT", 587))
-app.config["MAIL_USE_TLS"] = True
-app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME")
-app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD")
-app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER", os.getenv("MAIL_USERNAME"))
-mail = Mail(app)
+# SMTP2GO email config
+SMTP2GO_API_KEY  = os.getenv("SMTP2GO_API_KEY")
+SENDER_EMAIL     = os.getenv("SENDER_EMAIL", "lenscape@jlug.club")
+SMTP2GO_API_URL  = "https://api.smtp2go.com/v3/email/send"
 
 # OTP signing secret — used to create tamper-proof signed OTP tokens
 OTP_SECRET = os.getenv("OTP_SECRET", "otp-secret-change-me")
@@ -489,7 +485,19 @@ def approve_artwork(artwork_id):
     if artwork and "artist" in artwork:
         check_and_unlock_achievements(artwork["artist"]["id"])
 
+        # Send approval notification email to the artist
+        try:
+            send_approval_email(
+                artist_email=artwork["artist"]["email"],
+                artist_name=artwork["artist"]["name"],
+                artwork_title=artwork["title"],
+                category=artwork.get("category", "")
+            )
+        except Exception as e:
+            app.logger.warning(f"Approval email failed for artwork {artwork_id}: {e}")
+
     return jsonify({"success": True}), 200
+
 
 @app.route("/api/artworks/<artwork_id>/reject", methods=["POST"])
 @admin_only
@@ -504,6 +512,21 @@ def reject_artwork(artwork_id):
     result = artworks_col.update_one({"_id": artwork_id}, {"$set": update})
     if result.matched_count == 0:
         return jsonify({"error": "Artwork not found"}), 404
+
+    # Send rejection notification email to the artist
+    artwork = artworks_col.find_one({"_id": artwork_id})
+    if artwork and "artist" in artwork:
+        try:
+            send_rejection_email(
+                artist_email=artwork["artist"]["email"],
+                artist_name=artwork["artist"]["name"],
+                artwork_title=artwork["title"],
+                category=artwork.get("category", ""),
+                reason=reason
+            )
+        except Exception as e:
+            app.logger.warning(f"Rejection email failed for artwork {artwork_id}: {e}")
+
     return jsonify({"success": True}), 200
 
 # 5. User Ban Management
@@ -552,10 +575,12 @@ def issue_user_jwt(user_id, email, name, profile_complete):
 
 
 def send_otp_email(email, otp):
-    msg = Message(
-        subject="Lenscape — Your Verification Code",
-        recipients=[email],
-        html=f"""
+    payload = {
+        "api_key": SMTP2GO_API_KEY,
+        "to": [email],
+        "sender": f"Lenscape <{SENDER_EMAIL}>",
+        "subject": "Lenscape — Your Verification Code",
+        "html_body": f"""
         <div style="font-family:monospace;background:#0c0c0c;color:#e8dcc8;padding:32px;max-width:480px;margin:auto;border:1px solid rgba(201,168,76,0.3)">
           <p style="font-size:10px;color:#C9A84C;letter-spacing:0.3em;text-transform:uppercase;margin-bottom:8px">Lenscape · Digital Exhibition</p>
           <h2 style="font-size:28px;font-weight:300;margin:0 0 24px">Verification Code</h2>
@@ -566,9 +591,86 @@ def send_otp_email(email, otp):
           </p>
         </div>
         """
-    )
-    mail.send(msg)
+    }
+    resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
+    resp.raise_for_status()
+    result = resp.json()
+    if not result.get("data", {}).get("succeeded"):
+        raise RuntimeError(f"SMTP2GO send failed: {result}")
 
+
+def send_approval_email(artist_email, artist_name, artwork_title, category):
+    payload = {
+        "api_key": SMTP2GO_API_KEY,
+        "to": [artist_email],
+        "sender": f"Lenscape <{SENDER_EMAIL}>",
+        "subject": "Lenscape — Your Artwork Has Been Approved 🎉",
+        "html_body": f"""
+        <div style="font-family:monospace;background:#0c0c0c;color:#e8dcc8;padding:32px;max-width:520px;margin:auto;border:1px solid rgba(201,168,76,0.3)">
+          <p style="font-size:10px;color:#C9A84C;letter-spacing:0.3em;text-transform:uppercase;margin-bottom:8px">Lenscape · Digital Exhibition</p>
+          <h2 style="font-size:26px;font-weight:300;margin:0 0 8px">Your artwork is now live.</h2>
+          <p style="font-size:12px;color:#888;margin:0 0 28px">Congratulations, {artist_name}.</p>
+          <div style="border:1px solid rgba(201,168,76,0.25);padding:20px;margin-bottom:28px;background:#0e0d0a">
+            <p style="font-size:10px;color:#C9A84C;letter-spacing:0.2em;text-transform:uppercase;margin:0 0 6px">Accepted Submission</p>
+            <p style="font-size:18px;font-weight:300;margin:0 0 6px;color:#e8dcc8">{artwork_title}</p>
+            <p style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.15em;margin:0">{category.replace('-', ' ')}</p>
+          </div>
+          <p style="font-size:11px;color:#666;line-height:1.8">
+            Your artwork has been reviewed and <strong style="color:#C9A84C">approved</strong> for the Lenscape exhibition.<br>
+            It is now visible in the gallery and eligible to receive votes from the community.
+          </p>
+          <div style="margin-top:28px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.05)">
+            <p style="font-size:10px;color:#444;margin:0">Lenscape · JLUG Digital Exhibition · <a href="https://lenscape.jlug.club" style="color:#C9A84C;text-decoration:none">lenscape.jlug.club</a></p>
+          </div>
+        </div>
+        """
+    }
+    resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
+    resp.raise_for_status()
+    result = resp.json()
+    if not result.get("data", {}).get("succeeded"):
+        raise RuntimeError(f"SMTP2GO send failed: {result}")
+
+
+def send_rejection_email(artist_email, artist_name, artwork_title, category, reason=""):
+    reason_block = f"""
+          <div style="border-left:2px solid rgba(201,168,76,0.4);padding:12px 16px;margin:20px 0;background:#0e0d0a">
+            <p style="font-size:10px;color:#C9A84C;letter-spacing:0.2em;text-transform:uppercase;margin:0 0 6px">Reviewer's Note</p>
+            <p style="font-size:11px;color:#aaa;margin:0;line-height:1.7">{reason}</p>
+          </div>
+    """ if reason else ""
+
+    payload = {
+        "api_key": SMTP2GO_API_KEY,
+        "to": [artist_email],
+        "sender": f"Lenscape <{SENDER_EMAIL}>",
+        "subject": "Lenscape — Update on Your Submission",
+        "html_body": f"""
+        <div style="font-family:monospace;background:#0c0c0c;color:#e8dcc8;padding:32px;max-width:520px;margin:auto;border:1px solid rgba(201,168,76,0.3)">
+          <p style="font-size:10px;color:#C9A84C;letter-spacing:0.3em;text-transform:uppercase;margin-bottom:8px">Lenscape · Digital Exhibition</p>
+          <h2 style="font-size:26px;font-weight:300;margin:0 0 8px">Submission not accepted.</h2>
+          <p style="font-size:12px;color:#888;margin:0 0 28px">Hi {artist_name}, thank you for participating.</p>
+          <div style="border:1px solid rgba(255,255,255,0.08);padding:20px;margin-bottom:20px;background:#0a0a0a">
+            <p style="font-size:10px;color:#666;letter-spacing:0.2em;text-transform:uppercase;margin:0 0 6px">Submission</p>
+            <p style="font-size:18px;font-weight:300;margin:0 0 6px;color:#e8dcc8">{artwork_title}</p>
+            <p style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.15em;margin:0">{category.replace('-', ' ')}</p>
+          </div>
+          {reason_block}
+          <p style="font-size:11px;color:#666;line-height:1.8">
+            After review, your submission was <strong style="color:#e8dcc8">not selected</strong> for the current exhibition.<br>
+            We encourage you to keep creating and submit again in future exhibitions.
+          </p>
+          <div style="margin-top:28px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.05)">
+            <p style="font-size:10px;color:#444;margin:0">Lenscape · JLUG Digital Exhibition · <a href="https://lenscape.jlug.club" style="color:#C9A84C;text-decoration:none">lenscape.jlug.club</a></p>
+          </div>
+        </div>
+        """
+    }
+    resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
+    resp.raise_for_status()
+    result = resp.json()
+    if not result.get("data", {}).get("succeeded"):
+        raise RuntimeError(f"SMTP2GO send failed: {result}")
 
 # ── User Auth Routes ─────────────────────────────────────────────────────────
 
