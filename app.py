@@ -204,9 +204,13 @@ def delete_category(name):
 @app.route("/api/users/submissions", methods=["GET"])
 @require_auth
 def get_user_submissions():
-    """Return all artworks submitted by the authenticated user (all statuses)."""
+    """Return all artworks submitted by the authenticated user (all statuses). Votes hidden."""
     submissions = list(artworks_col.find({"artist.id": g.user_id}).sort("createdAt", -1))
-    return jsonify(serialize_doc(submissions)), 200
+    serialized = serialize_doc(submissions)
+    for art in serialized:
+        art.pop("votes", None)
+        art.pop("voters", None)
+    return jsonify(serialized), 200
 
 
 @app.route("/api/users/profile", methods=["GET"])
@@ -290,9 +294,16 @@ def update_profile():
 # 3. Artwork Endpoints
 @app.route("/api/artworks", methods=["GET"])
 def get_artworks():
-    # Only return approved artworks for public feed
+    # Only return approved artworks for public feed — votes are excluded for regular users
     artworks = list(artworks_col.find({"status": "approved"}).sort("createdAt", -1))
-    return jsonify(serialize_doc(artworks)), 200
+    serialized = serialize_doc(artworks)
+
+    # Strip vote counts from public response — only admins can see votes
+    for art in serialized:
+        art.pop("votes", None)
+        art.pop("voters", None)
+
+    return jsonify(serialized), 200
 
 @app.route("/api/artworks/pending", methods=["GET"])
 @admin_only
