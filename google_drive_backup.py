@@ -2,28 +2,50 @@ import os
 import io
 import tempfile
 import requests
+import logging
+import os.path
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+logger = logging.getLogger(__name__)
 
 # Scopes for Google Drive API
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
-# Path to the service account key file
-SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_DRIVE_CREDENTIALS', 'path/to/your/credentials.json')
+# Path to the client secret file
+CLIENT_SECRET_FILE = os.getenv('GOOGLE_DRIVE_CREDENTIALS', 'client_secret.json')
+TOKEN_FILE = 'token.json'
 
 # The ID of the Google Drive folder where you want to backup artworks
 TARGET_FOLDER_ID = os.getenv('GOOGLE_DRIVE_BACKUP_FOLDER_ID', 'your_folder_id_here')
 
 def get_drive_service():
     """Authenticates and returns the Google Drive API service instance."""
+    creds = None
+    # The file token.json stores the user's access and refresh tokens, and is
+    # created automatically when the authorization flow completes for the first time.
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        if os.path.exists(TOKEN_FILE):
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        # If there are no (valid) credentials available, let the user log in.
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    CLIENT_SECRET_FILE, SCOPES)
+                creds = flow.run_local_server(port=0)
+            # Save the credentials for the next run
+            with open(TOKEN_FILE, 'w') as token:
+                token.write(creds.to_json())
+
         service = build('drive', 'v3', credentials=creds)
         return service
     except Exception as e:
-        print(f"Error authenticating with Google Drive: {e}")
+        logger.error(f"Error authenticating with Google Drive: {e}")
         return None
 
 def get_or_create_folder(service, folder_name: str, parent_id: str) -> str:
@@ -34,7 +56,13 @@ def get_or_create_folder(service, folder_name: str, parent_id: str) -> str:
     try:
         # Search for the folder in the specified parent
         query = f"name='{folder_name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = service.files().list(q=query, fields="files(id, name)").execute()
+        results = service.files().list(
+            q=query, 
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            corpora="allDrives"
+        ).execute()
         items = results.get('files', [])
 
         if items:
@@ -46,11 +74,11 @@ def get_or_create_folder(service, folder_name: str, parent_id: str) -> str:
                 'mimeType': 'application/vnd.google-apps.folder',
                 'parents': [parent_id]
             }
-            folder = service.files().create(body=file_metadata, fields='id').execute()
-            print(f"Created subfolder: '{folder_name}' with ID: {folder.get('id')}")
+            folder = service.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
+            logger.info(f"Created subfolder: '{folder_name}' with ID: {folder.get('id')}")
             return folder.get('id')
     except Exception as e:
-        print(f"Error finding/creating folder {folder_name}: {e}")
+        logger.error(f"Error finding/creating folder {folder_name}: {e}")
         return None
 
 def backup_artwork_to_drive(file_url: str, full_name: str, name_of_artwork: str, file_type: str, mime_type: str, is_cover_photo: bool = False) -> str:
@@ -115,7 +143,7 @@ def backup_artwork_to_drive(file_url: str, full_name: str, name_of_artwork: str,
         subfolder_id = get_or_create_folder(service, target_subfolder_name, TARGET_FOLDER_ID)
         
         if not subfolder_id:
-            print(f"Could not resolve subfolder ID for {target_subfolder_name}.")
+            logger.error(f"Could not resolve subfolder ID for {target_subfolder_name}.")
             return None
 
         # 4. Upload the file to the targeted subfolder
@@ -125,23 +153,28 @@ def backup_artwork_to_drive(file_url: str, full_name: str, name_of_artwork: str,
         }
         
         media = MediaFileUpload(temp_path, mimetype=mime_type, resumable=True)
-        
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id'
-        ).execute()
-        
-        file_id = file.get('id')
-        print(f"Successfully backed up '{final_file_name}' to Google Drive folder '{target_subfolder_name}' with ID: {file_id}")
-        return file_id
+        try:
+            file = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id',
+                supportsAllDrives=True
+            ).execute()
+            
+            file_id = file.get('id')
+            logger.info(f"Successfully backed up '{final_file_name}' to Google Drive folder '{target_subfolder_name}' with ID: {file_id}")
+            return file_id
+        finally:
+            # Force close the file handle so Windows allows deletion
+            if hasattr(media, '_fd') and media._fd:
+                media._fd.close()
         
     except Exception as e:
-        print(f"An error occurred while uploading to Google Drive: {e}")
+        logger.error(f"An error occurred while uploading to Google Drive: {e}")
         return None
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except Exception as e:
-                print(f"Failed to clean up temp file {temp_path}: {e}")
+                logger.warning(f"Failed to clean up temp file {temp_path}: {e}")

@@ -21,6 +21,9 @@ venv.bak/
 serviceAccountKey.json
 lenscape-*.json
 credentials.json
+client_secret.json
+token.json
+*secret.json
 
 # IDEs/Editors
 .vscode/

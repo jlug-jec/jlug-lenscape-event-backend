@@ -2,9 +2,15 @@ import os
 import time
 import random
 import threading
+import logging
 import jwt as pyjwt
 import bcrypt
 import requests as http_requests
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s'
+)
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
