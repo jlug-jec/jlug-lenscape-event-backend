@@ -22,25 +22,45 @@ TOKEN_FILE = 'token.json'
 # The ID of the Google Drive folder where you want to backup artworks
 TARGET_FOLDER_ID = os.getenv('GOOGLE_DRIVE_BACKUP_FOLDER_ID', 'your_folder_id_here')
 
+import json
+
 def get_drive_service():
     """Authenticates and returns the Google Drive API service instance."""
     creds = None
-    # The file token.json stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first time.
+    
+    # 1. Try to load from Environment Variable (Production)
+    token_json_str = os.getenv('GOOGLE_OAUTH_TOKEN_JSON')
+    if token_json_str:
+        try:
+            token_info = json.loads(token_json_str)
+            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+        except Exception as e:
+            logger.error(f"Failed to parse GOOGLE_OAUTH_TOKEN_JSON: {e}")
+
+    # 2. Try to load from Local File (Development)
+    elif os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+
     try:
-        if os.path.exists(TOKEN_FILE):
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
         # If there are no (valid) credentials available, let the user log in.
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    CLIENT_SECRET_FILE, SCOPES)
+                # If we have client secret in env var, use it
+                client_secret_str = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET_JSON')
+                if client_secret_str:
+                    client_config = json.loads(client_secret_str)
+                    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        CLIENT_SECRET_FILE, SCOPES)
                 creds = flow.run_local_server(port=0)
-            # Save the credentials for the next run
-            with open(TOKEN_FILE, 'w') as token:
-                token.write(creds.to_json())
+                
+            # Only save to file if we are running locally (not using env vars)
+            if not token_json_str:
+                with open(TOKEN_FILE, 'w') as token:
+                    token.write(creds.to_json())
 
         service = build('drive', 'v3', credentials=creds)
         return service
