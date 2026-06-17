@@ -1,0 +1,32 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    # Every 10 minutes
+    - cron: "*/10 * * * *"
+
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping Render Health Endpoint
+        run: |
+          echo "Pinging Render..."
+
+          response=$(curl \
+            --silent \
+            --output /dev/null \
+            --write-out "%{http_code}" \
+            https://lenscape-backend.onrender.com/api/health)
+
+          echo "HTTP Status: $response"
+
+          if [ "$response" -eq 200 ]; then
+            echo "✅ Server is healthy"
+          else
+            echo "❌ Health check failed (status: $response)"
+            exit 1
+          fi
