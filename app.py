@@ -305,6 +305,33 @@ def get_artworks():
 
     return jsonify(serialized), 200
 
+@app.route("/api/admin/artworks", methods=["GET"])
+@admin_only
+def get_admin_artworks():
+    """Admin endpoint to get approved artworks with voter details"""
+    artworks = list(artworks_col.find({"status": "approved"}).sort("createdAt", -1))
+    serialized = serialize_doc(artworks)
+    
+    # Enrich with voter names
+    for art in serialized:
+        voters = art.get("voters", [])
+        voter_details = []
+        
+        if voters:
+            for voter_id in voters:
+                user = users_col.find_one({"_id": voter_id})
+                if user:
+                    voter_details.append({
+                        "id": voter_id,
+                        "name": user.get("name", "Unknown"),
+                        "email": user.get("email", ""),
+                        "college": user.get("college", "")
+                    })
+        
+        art["voterDetails"] = voter_details
+    
+    return jsonify(serialized), 200
+
 @app.route("/api/artworks/pending", methods=["GET"])
 @admin_only
 def get_pending_artworks():
@@ -487,7 +514,22 @@ def comment_artwork(artwork_id):
 @app.route("/api/artworks/<artwork_id>/approve", methods=["POST"])
 @admin_only
 def approve_artwork(artwork_id):
-    result = artworks_col.update_one({"_id": artwork_id}, {"$set": {"status": "approved"}})
+    # Get admin name from the JWT token
+    token = request.headers.get("Authorization", "").split(" ")[1] if request.headers.get("Authorization") else ""
+    try:
+        payload = pyjwt.decode(token, ADMIN_JWT_SECRET, algorithms=["HS256"])
+        admin_name = payload.get("name", "Unknown")
+    except:
+        admin_name = "Unknown"
+    
+    result = artworks_col.update_one(
+        {"_id": artwork_id},
+        {"$set": {
+            "status": "approved",
+            "approvedBy": admin_name,
+            "approvedAt": datetime.utcnow()
+        }}
+    )
     if result.matched_count == 0:
         return jsonify({"error": "Artwork not found"}), 404
 
@@ -603,11 +645,21 @@ def send_otp_email(email, otp):
         </div>
         """
     }
-    resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("data", {}).get("succeeded"):
-        raise RuntimeError(f"SMTP2GO send failed: {result}")
+    try:
+        resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        app.logger.info(f"SMTP2GO response: {result}")
+        
+        # Check if the API call was successful
+        if result.get("request_id"):  # SMTP2GO returns request_id on success
+            return True
+        elif not result.get("data", {}).get("succeeded"):
+            raise RuntimeError(f"SMTP2GO send failed: {result}")
+        return True
+    except http_requests.exceptions.RequestException as e:
+        app.logger.error(f"SMTP2GO request failed: {e}")
+        raise RuntimeError(f"Email service error: {str(e)}")
 
 
 def send_approval_email(artist_email, artist_name, artwork_title, category):
@@ -636,11 +688,20 @@ def send_approval_email(artist_email, artist_name, artwork_title, category):
         </div>
         """
     }
-    resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("data", {}).get("succeeded"):
-        raise RuntimeError(f"SMTP2GO send failed: {result}")
+    try:
+        resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        app.logger.info(f"SMTP2GO approval email response: {result}")
+        
+        if result.get("request_id"):
+            return True
+        elif not result.get("data", {}).get("succeeded"):
+            raise RuntimeError(f"SMTP2GO send failed: {result}")
+        return True
+    except http_requests.exceptions.RequestException as e:
+        app.logger.error(f"SMTP2GO approval email failed: {e}")
+        raise RuntimeError(f"Email service error: {str(e)}")
 
 
 def send_rejection_email(artist_email, artist_name, artwork_title, category, reason=""):
@@ -677,11 +738,20 @@ def send_rejection_email(artist_email, artist_name, artwork_title, category, rea
         </div>
         """
     }
-    resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("data", {}).get("succeeded"):
-        raise RuntimeError(f"SMTP2GO send failed: {result}")
+    try:
+        resp = http_requests.post(SMTP2GO_API_URL, json=payload, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        app.logger.info(f"SMTP2GO rejection email response: {result}")
+        
+        if result.get("request_id"):
+            return True
+        elif not result.get("data", {}).get("succeeded"):
+            raise RuntimeError(f"SMTP2GO send failed: {result}")
+        return True
+    except http_requests.exceptions.RequestException as e:
+        app.logger.error(f"SMTP2GO rejection email failed: {e}")
+        raise RuntimeError(f"Email service error: {str(e)}")
 
 # ── User Auth Routes ─────────────────────────────────────────────────────────
 
@@ -933,11 +1003,9 @@ ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "lenscape-master-key")
 @limiter.limit("5 per minute")
 def admin_login():
     """
-    Admin login/registration in one step.
-    Takes name, email, password, secretKey.
-    - secretKey must match the master ADMIN_SECRET_KEY (no email allow-list).
-    - If the email is new, an admin account is created on the fly.
-    - If it exists, the password is verified.
+    Admin login and signup endpoint.
+    - Login: email, password (no name provided)
+    - Signup: name, email, password, secretKey
     """
     data = request.get_json() or {}
     name = data.get("name", "").strip()
@@ -945,35 +1013,47 @@ def admin_login():
     password = data.get("password", "")
     secret_key = data.get("secretKey", "")
 
-    if not email or not password or not secret_key:
-        return jsonify({"error": "Email, password and secret key are required"}), 400
-
-    # Master secret key gate — open to any email that knows the key
-    if secret_key != ADMIN_SECRET_KEY:
-        return jsonify({"error": "Invalid secret key"}), 401
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
 
     admin = admins_col.find_one({"email": email})
 
-    if admin:
-        # Existing admin — verify password
+    if name:
+        # SIGNUP FLOW — create new admin or update existing
+        if not secret_key:
+            return jsonify({"error": "Secret key is required for registration"}), 400
+        
+        if secret_key != ADMIN_SECRET_KEY:
+            return jsonify({"error": "Invalid secret key"}), 401
+
+        if admin:
+            # Update existing admin password
+            password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+            admins_col.update_one({"email": email}, {"$set": {"passwordHash": password_hash, "name": name}})
+            admin_id = str(admin["_id"])
+            admin_name = name
+        else:
+            # Create new admin
+            password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+            new_admin = {
+                "name": name,
+                "email": email,
+                "passwordHash": password_hash,
+                "createdAt": datetime.utcnow(),
+            }
+            result = admins_col.insert_one(new_admin)
+            admin_id = str(result.inserted_id)
+            admin_name = name
+    else:
+        # LOGIN FLOW — verify existing admin
+        if not admin:
+            return jsonify({"error": "Invalid credentials"}), 401
+        
         if not bcrypt.checkpw(password.encode(), admin["passwordHash"].encode()):
             return jsonify({"error": "Invalid credentials"}), 401
+        
         admin_id = str(admin["_id"])
-        admin_name = admin.get("name", name or "Curator")
-    else:
-        # New admin — create account (name required for first registration)
-        if not name:
-            return jsonify({"error": "Name is required to register a new admin"}), 400
-        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        new_admin = {
-            "name": name,
-            "email": email,
-            "passwordHash": password_hash,
-            "createdAt": datetime.utcnow(),
-        }
-        result = admins_col.insert_one(new_admin)
-        admin_id = str(result.inserted_id)
-        admin_name = name
+        admin_name = admin.get("name", "Curator")
 
     payload = {
         "sub": admin_id,
