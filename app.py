@@ -57,10 +57,18 @@ limiter = Limiter(
     storage_uri="memory://"
 )
 
-# Configure Cloudinary if credentials exist
+# Configure Cloudinary — primary account
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
+
+# Fallback Cloudinary account (used when primary runs out of credits)
+CLOUDINARY_FALLBACK_CLOUD_NAME = os.getenv("CLOUDINARY_FALLBACK_CLOUD_NAME")
+CLOUDINARY_FALLBACK_API_KEY = os.getenv("CLOUDINARY_FALLBACK_API_KEY")
+CLOUDINARY_FALLBACK_API_SECRET = os.getenv("CLOUDINARY_FALLBACK_API_SECRET")
+
+# Track which account is currently active
+_using_fallback = False
 
 if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
     cloudinary.config(
@@ -69,9 +77,48 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
         api_secret=CLOUDINARY_API_SECRET,
         secure=True
     )
-    print("Cloudinary configured successfully.")
+    print("Cloudinary configured successfully (primary).")
 else:
     print("Warning: Cloudinary credentials missing. File uploads will fallback to text URLs.")
+
+def switch_to_fallback_cloudinary():
+    """Switch Cloudinary config to the fallback account."""
+    global _using_fallback, CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
+    if _using_fallback or not CLOUDINARY_FALLBACK_CLOUD_NAME:
+        return False
+    CLOUDINARY_CLOUD_NAME = CLOUDINARY_FALLBACK_CLOUD_NAME
+    CLOUDINARY_API_KEY = CLOUDINARY_FALLBACK_API_KEY
+    CLOUDINARY_API_SECRET = CLOUDINARY_FALLBACK_API_SECRET
+    cloudinary.config(
+        cloud_name=CLOUDINARY_FALLBACK_CLOUD_NAME,
+        api_key=CLOUDINARY_FALLBACK_API_KEY,
+        api_secret=CLOUDINARY_FALLBACK_API_SECRET,
+        secure=True
+    )
+    _using_fallback = True
+    print("⚠ Switched to fallback Cloudinary account.")
+    return True
+
+def _is_credit_error(e):
+    """Check if a Cloudinary error is due to credit/quota exhaustion."""
+    msg = str(e).lower()
+    return any(kw in msg for kw in [
+        "quota", "limit", "credit", "exceeded", "usage", "plan",
+        "rate limit", "too many", "402", "429"
+    ])
+
+def cloudinary_upload_with_fallback(file, **kwargs):
+    """
+    Upload to Cloudinary with automatic fallback.
+    If the primary account fails due to credits/quota, switches to fallback and retries.
+    """
+    try:
+        return cloudinary.uploader.upload(file, **kwargs)
+    except Exception as e:
+        if _is_credit_error(e) and not _using_fallback and switch_to_fallback_cloudinary():
+            print(f"Primary Cloudinary failed ({e}), retrying with fallback...")
+            return cloudinary.uploader.upload(file, **kwargs)
+        raise
 
 # Initialize Firestore + seed default categories
 init_db()
@@ -243,7 +290,7 @@ def update_profile():
         avatar_file = request.files.get("avatarFile")
         if avatar_file and CLOUDINARY_CLOUD_NAME:
             try:
-                upload_result = cloudinary.uploader.upload(avatar_file, folder="lenscape/avatars")
+                upload_result = cloudinary_upload_with_fallback(avatar_file, folder="lenscape/avatars")
                 avatar_url = upload_result.get("secure_url")
             except Exception as e:
                 return jsonify({"error": f"Failed to upload avatar: {str(e)}"}), 500

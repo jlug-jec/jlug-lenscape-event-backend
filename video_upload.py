@@ -8,6 +8,14 @@ from werkzeug.utils import secure_filename
 import os
 import tempfile
 
+def _get_upload_fn():
+    """Get the upload function — use fallback wrapper if available, else direct."""
+    try:
+        from app import cloudinary_upload_with_fallback
+        return cloudinary_upload_with_fallback
+    except ImportError:
+        return cloudinary.uploader.upload
+
 def allowed_video_file(filename):
     """Check if file is an allowed video format"""
     ALLOWED_EXTENSIONS = {'mp4', 'mkv'}
@@ -36,7 +44,8 @@ def upload_video_to_cloudinary(video_file, artwork_id):
         video_file.save(temp_path)
         
         # Upload to Cloudinary with video-specific settings
-        result = cloudinary.uploader.upload(
+        upload = _get_upload_fn()
+        result = upload(
             temp_path,
             resource_type="video",
             public_id=f"lenscape/videos/{artwork_id}",
@@ -105,7 +114,8 @@ def upload_cover_image_to_cloudinary(cover_file, artwork_id):
         cover_file.save(temp_path)
         
         # Upload to Cloudinary with image-specific settings
-        result = cloudinary.uploader.upload(
+        upload = _get_upload_fn()
+        result = upload(
             temp_path,
             resource_type="image",
             public_id=f"lenscape/covers/{artwork_id}",
