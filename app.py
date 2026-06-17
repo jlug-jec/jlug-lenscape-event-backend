@@ -78,8 +78,21 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
         secure=True
     )
     print("Cloudinary configured successfully (primary).")
+elif CLOUDINARY_FALLBACK_CLOUD_NAME and CLOUDINARY_FALLBACK_API_KEY and CLOUDINARY_FALLBACK_API_SECRET:
+    # Primary missing/incomplete — use fallback from the start
+    CLOUDINARY_CLOUD_NAME = CLOUDINARY_FALLBACK_CLOUD_NAME
+    CLOUDINARY_API_KEY = CLOUDINARY_FALLBACK_API_KEY
+    CLOUDINARY_API_SECRET = CLOUDINARY_FALLBACK_API_SECRET
+    cloudinary.config(
+        cloud_name=CLOUDINARY_FALLBACK_CLOUD_NAME,
+        api_key=CLOUDINARY_FALLBACK_API_KEY,
+        api_secret=CLOUDINARY_FALLBACK_API_SECRET,
+        secure=True
+    )
+    _using_fallback = True
+    print("[Cloudinary] ⚠ Primary credentials missing — using FALLBACK account (dpnbjyxsc).")
 else:
-    print("Warning: Cloudinary credentials missing. File uploads will fallback to text URLs.")
+    print("Warning: No Cloudinary credentials configured. File uploads will not work.")
 
 def switch_to_fallback_cloudinary():
     """Switch Cloudinary config to the fallback account."""
@@ -112,12 +125,19 @@ def cloudinary_upload_with_fallback(file, **kwargs):
     Upload to Cloudinary with automatic fallback.
     If the primary account fails due to credits/quota, switches to fallback and retries.
     """
+    if _using_fallback:
+        print(f"[Cloudinary] ⚠ Using FALLBACK account (dpnbjyxsc) for upload: {kwargs.get('folder', 'unknown')}")
     try:
-        return cloudinary.uploader.upload(file, **kwargs)
+        result = cloudinary.uploader.upload(file, **kwargs)
+        if _using_fallback:
+            print(f"[Cloudinary] ✓ Fallback upload succeeded: {result.get('public_id', '')}")
+        return result
     except Exception as e:
-        if _is_credit_error(e) and not _using_fallback and switch_to_fallback_cloudinary():
-            print(f"Primary Cloudinary failed ({e}), retrying with fallback...")
-            return cloudinary.uploader.upload(file, **kwargs)
+        if not _using_fallback and switch_to_fallback_cloudinary():
+            print(f"[Cloudinary] ✗ Primary failed ({e}), retrying with fallback...")
+            result = cloudinary.uploader.upload(file, **kwargs)
+            print(f"[Cloudinary] ✓ Fallback upload succeeded: {result.get('public_id', '')}")
+            return result
         raise
 
 # Initialize Firestore + seed default categories
