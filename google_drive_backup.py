@@ -1,7 +1,9 @@
 import os
 import io
+import tempfile
+import requests
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaFileUpload
 from google.oauth2 import service_account
 
 # Scopes for Google Drive API
@@ -51,12 +53,12 @@ def get_or_create_folder(service, folder_name: str, parent_id: str) -> str:
         print(f"Error finding/creating folder {folder_name}: {e}")
         return None
 
-def backup_artwork_to_drive(file_data: bytes, full_name: str, name_of_artwork: str, file_type: str, mime_type: str, is_cover_photo: bool = False) -> str:
+def backup_artwork_to_drive(file_url: str, full_name: str, name_of_artwork: str, file_type: str, mime_type: str, is_cover_photo: bool = False) -> str:
     """
     Uploads an artwork to specific Google Drive subfolders ('photos' or 'videos') based on file_type.
     
     Args:
-        file_data: The file content as bytes.
+        file_url: The URL to download the file from.
         full_name: The user's full name.
         name_of_artwork: The artwork's name.
         file_type: 'photo' or 'video'.
@@ -70,7 +72,18 @@ def backup_artwork_to_drive(file_data: bytes, full_name: str, name_of_artwork: s
     if not service:
         return None
         
+    temp_path = None
     try:
+        # Download the file to a temporary location
+        response = requests.get(file_url, stream=True)
+        response.raise_for_status()
+        
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    tmp_file.write(chunk)
+            temp_path = tmp_file.name
+
         # Clean inputs to prevent issues with slashes or weird characters in names
         safe_full_name = full_name.replace("/", "_").replace("\\", "_")
         safe_artwork_name = name_of_artwork.replace("/", "_").replace("\\", "_")
@@ -90,6 +103,8 @@ def backup_artwork_to_drive(file_data: bytes, full_name: str, name_of_artwork: s
             ext = ".png"
         elif mime_type == 'video/mp4':
             ext = ".mp4"
+        elif mime_type == 'video/x-matroska' or mime_type == 'video/mkv':
+            ext = ".mkv"
             
         final_file_name = f"{file_name}{ext}"
 
@@ -109,7 +124,7 @@ def backup_artwork_to_drive(file_data: bytes, full_name: str, name_of_artwork: s
             'parents': [subfolder_id]
         }
         
-        media = MediaIoBaseUpload(io.BytesIO(file_data), mimetype=mime_type, resumable=True)
+        media = MediaFileUpload(temp_path, mimetype=mime_type, resumable=True)
         
         file = service.files().create(
             body=file_metadata,
@@ -124,3 +139,9 @@ def backup_artwork_to_drive(file_data: bytes, full_name: str, name_of_artwork: s
     except Exception as e:
         print(f"An error occurred while uploading to Google Drive: {e}")
         return None
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception as e:
+                print(f"Failed to clean up temp file {temp_path}: {e}")

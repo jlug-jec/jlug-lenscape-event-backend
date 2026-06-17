@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import threading
 import jwt as pyjwt
 import bcrypt
 import requests as http_requests
@@ -25,6 +26,7 @@ from video_upload import (
     delete_video_from_cloudinary,
     delete_image_from_cloudinary
 )
+from google_drive_backup import backup_artwork_to_drive
 
 # Load environment variables
 load_dotenv()
@@ -495,6 +497,13 @@ def submit_artwork():
     
     # Check achievements for submitter
     check_and_unlock_achievements(g.user_id)
+    
+    if image_url:
+        ext = image_url.split('.')[-1].lower() if '.' in image_url else 'jpg'
+        mime = 'image/png' if ext == 'png' else 'image/jpeg'
+        def backup_task():
+            backup_artwork_to_drive(image_url, user["name"], title, 'photo', mime)
+        threading.Thread(target=backup_task, daemon=True).start()
     
     return jsonify(serialize_doc(artwork_doc)), 201
 
@@ -1265,6 +1274,20 @@ def submit_video_artwork():
         
         # Check achievements
         check_and_unlock_achievements(g.user_id)
+        
+        video_url_for_backup = video_result['video_url']
+        cover_url_for_backup = cover_result['image_url']
+        
+        def backup_video_task():
+            video_ext = video_url_for_backup.split('.')[-1].lower() if '.' in video_url_for_backup else 'mp4'
+            video_mime = 'video/x-matroska' if video_ext == 'mkv' else 'video/mp4'
+            backup_artwork_to_drive(video_url_for_backup, user["name"], title, 'video', video_mime, False)
+            
+            cover_ext = cover_url_for_backup.split('.')[-1].lower() if '.' in cover_url_for_backup else 'jpg'
+            cover_mime = 'image/png' if cover_ext == 'png' else 'image/jpeg'
+            backup_artwork_to_drive(cover_url_for_backup, user["name"], title, 'video', cover_mime, True)
+            
+        threading.Thread(target=backup_video_task, daemon=True).start()
         
         print(f"Video artwork {artwork_id} submitted successfully!")
         
