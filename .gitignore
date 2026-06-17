@@ -16,9 +16,11 @@ venv.bak/
 .env.*.local
 .dependency-decisions.yml
 
-# Firebase service account credentials — NEVER commit
+# Service account credentials — NEVER commit
 *firebase-adminsdk*.json
 serviceAccountKey.json
+lenscape-*.json
+credentials.json
 
 # IDEs/Editors
 .vscode/
