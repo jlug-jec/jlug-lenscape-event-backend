@@ -1,11 +1,11 @@
-# Lenscape API (Flask + MongoDB + Clerk)
+# Lenscape API (Flask + Firestore + Firebase Auth)
 
-This is the Python-based backend service for the **Lenscape Immersive Digital Art Gallery**. It handles database operations on MongoDB, verifies user tokens from Clerk, manages artwork curation & voting, and uploads images/videos directly to Cloudinary.
+This is the Python-based backend service for the **Lenscape Immersive Digital Art Gallery**. It handles Firestore data operations, verifies Firebase user tokens, manages artwork curation and voting, and uploads images/videos directly to Cloudinary.
 
 ## Features
 *   **Flask API** with standard JSON payloads matching the frontend React models.
-*   **MongoDB Curation**: Handles users, artworks, comments, categories, and moderation statuses.
-*   **Clerk Authentication**: JWT signature validation against Clerk's JSON Web Key Sets (JWKS).
+*   **Firestore Curation**: Handles users, artworks, comments, categories, admins, and moderation statuses.
+*   **Firebase Authentication**: Verifies Firebase ID tokens for Google/email sign-in flows.
 *   **Cloudinary Integration**: Direct binary image/video uploads with dynamic media URL creation.
 *   **Unlocked Achievements**: Auto-evaluates requirements to award badges to students on interactions.
 *   **Local Developer Bypass**: Pass `X-Mock-User` and `X-Mock-Email` headers to bypass Clerk authentication in testing.
@@ -15,7 +15,7 @@ This is the Python-based backend service for the **Lenscape Immersive Digital Ar
 ## Getting Started
 
 ### 1. Requirements
-Ensure you have **Python 3.8+** and **MongoDB** installed (locally or via MongoDB Atlas).
+Ensure you have **Python 3.8+** installed and a Firebase project with Firestore enabled.
 
 ### 2. Setup Virtual Environment & Install Dependencies
 Navigate to this directory and create a virtual environment:
@@ -44,14 +44,19 @@ Rename `.env.example` to `.env` and configure your credentials:
 FLASK_PORT=5000
 FLASK_ENV=development
 
-# MongoDB URI (Atlas or local)
-MONGO_URI=mongodb://localhost:27017/lenscape
+# Firebase Admin credentials (use one)
+FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+FIREBASE_SERVICE_ACCOUNT=/absolute/path/to/firebase-service-account.json
 
-# Clerk JWKS endpoint (used to verify tokens locally)
-CLERK_JWKS_URL=https://<your-clerk-instance-id>.clerk.accounts.dev/.well-known/jwks.json
+# Admin and JWT secrets
+ADMIN_SECRET_KEY=change-this-master-key
+ADMIN_JWT_SECRET=change-this-admin-secret
+USER_JWT_SECRET=change-this-user-secret
+OTP_SECRET=change-this-otp-secret
 
-# Admin Emails
-ADMIN_EMAILS=admin@jlug.club,admin@lenscape.com
+# SMTP2GO email
+SMTP2GO_API_KEY=your-smtp2go-api-key
+SENDER_EMAIL=lenscape@jlug.club
 
 # Cloudinary configurations
 CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
@@ -60,7 +65,7 @@ CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 ```
 
 ### 4. Database Seeding (Optional)
-To pre-populate MongoDB with initial mock users and artworks from the frontend, run:
+To pre-populate Firestore with initial mock users and artworks from the frontend, run:
 
 ```bash
 python seed.py
@@ -83,7 +88,7 @@ The server will boot on `http://localhost:5000`.
 *   `GET /api/categories`: Fetch names of all art categories.
 *   `GET /api/artworks`: Fetch all approved artworks (ordered by creation date).
 
-### Authenticated Endpoints (Header: `Authorization: Bearer <Clerk_JWT>`)
+### Authenticated Endpoints (Header: `Authorization: Bearer <Firebase_ID_Token>`)
 *   `GET /api/cloudinary/signature`: Retrieve a cryptographic signed configuration to upload files directly from the frontend to Cloudinary.
 *   `GET /api/users/profile`: Retrieve user profile, their submissions, and unlocked achievements.
 *   `POST /api/users/profile` (JSON): Create/update user signature profile.
@@ -105,9 +110,9 @@ The server will boot on `http://localhost:5000`.
 ## Frontend Integration Tips
 
 ### Authentication Integration
-When communicating with the backend, acquire the session token from Clerk on the frontend:
+When communicating with the backend, acquire a Firebase ID token on the frontend:
 ```javascript
-const token = await window.Clerk.session.getToken();
+const token = await firebase.auth().currentUser.getIdToken();
 const response = await fetch('http://localhost:5000/api/users/profile', {
   headers: {
     'Authorization': `Bearer ${token}`
