@@ -193,20 +193,20 @@ def check_and_unlock_achievements(user_id):
     new_achievements = list(user_achievements)
     
     # 1. Creative Pioneer: First submission
-    user_submissions_count = artworks_col.count_documents({"artist.id": user_id})
-    if user_submissions_count > 0 and "ach1" not in unlocked_ids:
-        new_achievements.append({
-            "id": "ach1",
-            "title": "Creative Pioneer",
-            "description": "Submitted your first artwork to the gallery",
-            "icon": "🚀",
-            "unlockedAt": datetime.utcnow()
-        })
-        
-    # 2. Art Critic: Left a comment
-    # Count if user has commented on any approved artworks
-    comment_count = artworks_col.count_documents({"comments.userId": user_id})
-    if comment_count > 0 and "ach2" not in unlocked_ids:
+    if "ach1" not in unlocked_ids:
+        user_submissions_count = artworks_col.count_documents({"artist.id": user_id})
+        if user_submissions_count > 0:
+            new_achievements.append({
+                "id": "ach1",
+                "title": "Creative Pioneer",
+                "description": "Submitted your first artwork to the gallery",
+                "icon": "🚀",
+                "unlockedAt": datetime.utcnow()
+            })
+
+    # 2. Art Critic: Left a comment.
+    # Keep this on the user document so we do not scan every artwork's comments.
+    if "ach2" not in unlocked_ids and user.get("commentedArtworks"):
         new_achievements.append({
             "id": "ach2",
             "title": "Art Critic",
@@ -227,16 +227,17 @@ def check_and_unlock_achievements(user_id):
         })
         
     # 4. Polymath: Voted in all available categories
-    all_cats = [cat["name"] for cat in categories_col.find({"name": {"$ne": "other"}})]
-    voted_main_cats = [c for c in voted_cats if c != "other"]
-    if len(all_cats) > 0 and len(voted_main_cats) >= len(all_cats) and "ach4" not in unlocked_ids:
-        new_achievements.append({
-            "id": "ach4",
-            "title": "Polymath",
-            "description": "Voted in all available artwork categories",
-            "icon": "🔮",
-            "unlockedAt": datetime.utcnow()
-        })
+    if "ach4" not in unlocked_ids:
+        all_cats = [cat["name"] for cat in categories_col.find({"name": {"$ne": "other"}})]
+        voted_main_cats = [c for c in voted_cats if c != "other"]
+        if len(all_cats) > 0 and len(voted_main_cats) >= len(all_cats):
+            new_achievements.append({
+                "id": "ach4",
+                "title": "Polymath",
+                "description": "Voted in all available artwork categories",
+                "icon": "🔮",
+                "unlockedAt": datetime.utcnow()
+            })
         
     if len(new_achievements) != len(user.get("achievements", [])):
         users_col.update_one({"_id": user_id}, {"$set": {"achievements": new_achievements}})
@@ -585,6 +586,10 @@ def comment_artwork(artwork_id):
     artworks_col.update_one(
         {"_id": artwork_id},
         {"$push": {"comments": comment_doc}}
+    )
+    users_col.update_one(
+        {"_id": g.user_id},
+        {"$push": {"commentedArtworks": artwork_id}}
     )
 
     # Check achievements

@@ -6,15 +6,19 @@ subset of the PyMongo API the app uses (find_one, find, insert_one,
 update_one, delete_one, count_documents, insert_many, create_index) so the
 rest of the codebase needs almost no changes.
 
-Queries are evaluated in Python after streaming the collection — this keeps
-us free of Firestore composite-index requirements, which is fine for an
-event-scale dataset.
+Simple queries are pushed down to Firestore so reads scale with matching
+documents instead of total collection size. Only unsupported compatibility
+filters fall back to Python-side filtering.
 """
 
 import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as firebase_auth
+try:
+    from google.cloud.firestore_v1 import FieldFilter
+except ImportError:  # pragma: no cover - older google-cloud-firestore fallback
+    FieldFilter = None
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -65,7 +69,10 @@ class _Cursor:
 
     def sort(self, field, direction=1):
         self._docs.sort(
-            key=lambda d: (d.get(field) is None, d.get(field)),
+            key=lambda d: (
+                FirestoreCollection._get_field(d, field) is None,
+                FirestoreCollection._get_field(d, field),
+            ),
             reverse=(direction == -1),
         )
         return self
@@ -79,6 +86,17 @@ class _Cursor:
 
 # ── Collection wrapper ───────────────────────────────────────────────────────
 class FirestoreCollection:
+    _SUPPORTED_OPERATORS = {
+        "$ne": "!=",
+        "$gt": ">",
+        "$gte": ">=",
+        "$lt": "<",
+        "$lte": "<=",
+        "$in": "in",
+        "$array_contains": "array_contains",
+        "$array_contains_any": "array_contains_any",
+    }
+
     def __init__(self, name):
         self.name = name
         self.col = _db.collection(name)
@@ -91,6 +109,78 @@ class FirestoreCollection:
 
     def _all(self):
         return [self._doc_to_dict(s) for s in self.col.stream()]
+
+    def _where(self, query_ref, field, op, value):
+        if FieldFilter is not None:
+            return query_ref.where(filter=FieldFilter(field, op, value))
+        return query_ref.where(field, op, value)
+
+    def _build_query(self, query):
+        query_ref = self.col
+        post_filters = {}
+
+        for key, value in query.items():
+            if key == "_id":
+                post_filters[key] = value
+                continue
+
+            # Firestore cannot query into arrays of maps like comments.userId.
+            if key == "comments.userId":
+                post_filters[key] = value
+                continue
+
+            if isinstance(value, dict):
+                if len(value) != 1:
+                    post_filters[key] = value
+                    continue
+
+                op_key, op_value = next(iter(value.items()))
+                firestore_op = self._SUPPORTED_OPERATORS.get(op_key)
+                if firestore_op is None:
+                    post_filters[key] = value
+                    continue
+
+                query_ref = self._where(query_ref, key, firestore_op, op_value)
+            else:
+                query_ref = self._where(query_ref, key, "==", value)
+
+        return query_ref, post_filters
+
+    def _query_docs(self, query=None, limit=None):
+        query = query or {}
+
+        if "_id" in query and isinstance(query["_id"], str):
+            snap = self.col.document(query["_id"]).get()
+            if not snap.exists:
+                return []
+            doc = self._doc_to_dict(snap)
+            rest = {k: v for k, v in query.items() if k != "_id"}
+            return [doc] if self._match(doc, rest) else []
+
+        query_ref, post_filters = self._build_query(query)
+        server_limit = limit if not post_filters else None
+        if server_limit is not None:
+            query_ref = query_ref.limit(server_limit)
+
+        docs = [self._doc_to_dict(s) for s in query_ref.stream()]
+        if post_filters:
+            docs = [d for d in docs if self._match(d, post_filters)]
+            if limit is not None:
+                docs = docs[:limit]
+        return docs
+
+    @staticmethod
+    def _aggregation_count_value(result):
+        first = result[0]
+        if isinstance(first, (list, tuple)):
+            first = first[0]
+        return int(first.value)
+
+    def _count_server_query(self, query_ref):
+        try:
+            return self._aggregation_count_value(query_ref.count().get())
+        except Exception:
+            return sum(1 for _ in query_ref.stream())
 
     @staticmethod
     def _get_field(doc, key):
@@ -131,28 +221,22 @@ class FirestoreCollection:
     # -- read --
     def find_one(self, query=None):
         query = query or {}
-        # fast path: lookup by document id
-        if "_id" in query and isinstance(query["_id"], str):
-            snap = self.col.document(query["_id"]).get()
-            if not snap.exists:
-                return None
-            doc = self._doc_to_dict(snap)
-            rest = {k: v for k, v in query.items() if k != "_id"}
-            return doc if self._match(doc, rest) else None
-        for doc in self._all():
-            if self._match(doc, query):
-                return doc
-        return None
+        docs = self._query_docs(query, limit=1)
+        return docs[0] if docs else None
 
     def find(self, query=None):
         query = query or {}
-        return _Cursor([d for d in self._all() if self._match(d, query)])
+        return _Cursor(self._query_docs(query))
 
     def count_documents(self, query=None):
         query = query or {}
-        if not query:
-            return sum(1 for _ in self.col.stream())
-        return len([d for d in self._all() if self._match(d, query)])
+        if "_id" in query or "comments.userId" in query:
+            return len(self._query_docs(query))
+
+        query_ref, post_filters = self._build_query(query)
+        if post_filters:
+            return len(self._query_docs(query))
+        return self._count_server_query(query_ref)
 
     # -- write --
     def insert_one(self, doc):
