@@ -178,8 +178,12 @@ class FirestoreCollection:
 
     def _count_server_query(self, query_ref):
         try:
-            return self._aggregation_count_value(query_ref.count().get())
-        except Exception:
+            aggregation = query_ref.count()
+        except AttributeError:
+            return sum(1 for _ in query_ref.stream())
+        try:
+            return self._aggregation_count_value(aggregation.get())
+        except (AttributeError, TypeError, IndexError, ValueError):
             return sum(1 for _ in query_ref.stream())
 
     @staticmethod
